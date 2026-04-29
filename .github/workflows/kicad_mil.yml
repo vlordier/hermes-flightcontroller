@@ -170,16 +170,16 @@ jobs:
 
       - name: Convert Gerbers to OpenEMS model
         run: |
-          if command -v gerber2ems >/dev/null 2>&1; then
+          # Attempt gerber2ems conversion; skip cleanly if tool is unavailable.
+          # No stub files are created — the FDTD step detects an empty/missing
+          # model directory and exits gracefully.
+          if python3 -c "import gerber2ems" 2>/dev/null; then
             python3 -m gerber2ems \
               PCB/HermesFC/manufacturing/ \
               --output em_sim/ \
-              --layers F.Cu,B.Cu,In1.Cu,In2.Cu \
-              || true
+              --layers F.Cu,B.Cu,In1.Cu,In2.Cu
           else
-            echo "gerber2ems not available — generating stub model."
-            mkdir -p em_sim
-            echo "stub" > em_sim/model.stub
+            echo "gerber2ems not available — skipping Gerber-to-openEMS conversion."
           fi
         continue-on-error: true
 
@@ -194,13 +194,49 @@ jobs:
           name: mil-em-sim-results
           path: em_sim/
 
-  # ── 5. MIL compliance checklist ──────────────────────────────────────────
+  # ── 5. PCB & BOM physical checks ─────────────────────────────────────────
+  pcb-bom-checks:
+    name: PCB & BOM Physical Checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Run PCB physical checks (MIL-STD-275E / IPC-2221A)
+        # Parses .kicad_pcb directly — no KiCad installation needed.
+        # Checks: 4-layer stackup, GND zone on inner layers, via drills >= 0.3 mm,
+        # track widths on signal layers >= 0.25 mm, GND stitching via count.
+        run: |
+          python3 scripts/check_pcb.py "$PCB"
+        continue-on-error: true
+
+      - name: Run BOM validation (LCSC coverage, TVS/ESD, power ICs)
+        # Parses manufacturing/bom.csv — no KiCad installation needed.
+        # Checks: LCSC part numbers for all parts, TVS/ESD protection present,
+        # sufficient decoupling capacitors, no empty value fields.
+        run: |
+          python3 scripts/check_bom.py PCB/HermesFC/manufacturing/bom.csv
+
+      - name: Upload PCB/BOM check results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mil-pcb-bom-reports
+          path: |
+            erc_report.txt
+            drc_report.txt
+
+  # ── 6. MIL compliance checklist ──────────────────────────────────────────
   mil-checklist:
     name: MIL Compliance Checklist
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [erc-drc, spice-simulation, em-simulation]
+    needs: [erc-drc, spice-simulation, em-simulation, pcb-bom-checks]
     if: always()
 
     steps:
@@ -235,7 +271,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3
 
       - name: Generate MIL Compliance Report
-        run: python3 scripts/mil_checklist.py --report mil_compliance.md
+        # Runs check_pcb.py and check_bom.py internally for real-time results;
+        # aggregates ERC/DRC/SPICE/EM artifact results where present.
+        run: |
+          python3 scripts/mil_checklist.py \
+            --report mil_compliance.md \
+            --pcb "$PCB" \
+            --bom PCB/HermesFC/manufacturing/bom.csv
 
       - name: Upload MIL Compliance Report
         if: always()

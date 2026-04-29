@@ -179,26 +179,17 @@ def main() -> int:
 
     model_dir = Path(args.model_dir)
 
-    # ── Stub / model availability check ─────────────────────────────────────
+    # ── Model directory availability ─────────────────────────────────────────
     if not model_dir.exists() or not any(model_dir.iterdir()):
         print(
-            "[EM] No EM model found — skipping simulation. "
-            "Add SPICE models and enable gerber2ems conversion to activate "
-            "MIL-STD-461 RE102/RS103 checks."
-        )
-        return 0
-
-    stub = model_dir / "model.stub"
-    if stub.exists():
-        print(
-            "[EM] Stub model detected (gerber2ems not yet configured). "
-            "Skipping FDTD simulation."
+            "[EM] No EM model found in '{}'. "
+            "Run gerber2ems first to convert Gerbers to an openEMS model.".format(model_dir)
         )
         return 0
 
     # ── OpenEMS availability ─────────────────────────────────────────────────
     if not _check_openems_available():
-        print("[EM] openEMS binary not found — skipping FDTD simulation.")
+        print("[EM] openEMS binary not found on PATH. Install openems to activate FDTD simulation.")
         return 0
 
     # ── Run simulation ───────────────────────────────────────────────────────
