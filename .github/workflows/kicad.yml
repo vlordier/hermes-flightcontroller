@@ -76,6 +76,7 @@ jobs:
       # ── Upload all artifacts ─────────────────────────────────────────────────
       - name: Upload Reports
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: validation-reports
@@ -85,6 +86,7 @@ jobs:
             sim_output.txt
 
       - name: Upload Manufacturing Files
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: manufacturing-files

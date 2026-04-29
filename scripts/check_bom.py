@@ -29,7 +29,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .config import settings
+try:
+    from .config import settings
+except ImportError:
+    from config import settings  # type: ignore
 
 # ── Thresholds and reference designator patterns ─────────────────────────────
 

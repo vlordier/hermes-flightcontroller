@@ -25,7 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import settings
+try:
+    from .config import settings
+except ImportError:
+    from config import settings  # type: ignore
 
 # ── MIL-STD-275E / IPC-2221A thresholds ──────────────────────────────────────
 MIN_GND_STITCH_VIAS = 10  # EMI best practice per MIL-STD-461 guidance
