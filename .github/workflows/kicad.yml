@@ -18,6 +18,8 @@ jobs:
   erc:
     name: Electrical Rules Check (ERC)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     container:
       image: ghcr.io/inti-cmnb/kicad_auto:ki8
 
@@ -40,6 +42,8 @@ jobs:
   drc:
     name: Design Rules Check (DRC)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     container:
       image: ghcr.io/inti-cmnb/kicad_auto:ki8
 
