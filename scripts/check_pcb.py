@@ -103,19 +103,30 @@ class PcbParser:
         return vias
 
     def get_tracks(self) -> list[dict[str, Any]]:
-        """Return list of {width, layer} for every track segment."""
+        """Return list of {width, layer, net} for every track segment."""
         tracks = []
         for item in self.data:
             if isinstance(item, list) and sexpdata.Symbol("segment") == item[0]:
-                track_info = {"width": 0.0, "layer": ""}
+                track_info = {"width": 0.0, "layer": "", "net": 0}
                 for prop in item:
                     if isinstance(prop, list):
                         if sexpdata.Symbol("width") == prop[0]:
                             track_info["width"] = float(prop[1])
                         elif sexpdata.Symbol("layer") == prop[0]:
                             track_info["layer"] = prop[1]
+                        elif sexpdata.Symbol("net") == prop[0]:
+                            track_info["net"] = int(prop[1])
                 tracks.append(track_info)
         return tracks
+
+    def get_net_map(self) -> dict[int, str]:
+        """Return {net_id: net_name} mapping."""
+        net_map = {}
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("net") == item[0]:
+                # (net 1 "GND")
+                net_map[int(item[1])] = str(item[2])
+        return net_map
 
     def has_edge_cuts(self) -> bool:
         """Return True if an Edge.Cuts segment/drawing exists."""
@@ -225,35 +236,61 @@ def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
     return results
 
 
-def check_track_widths(tracks: list[dict[str, Any]]) -> list[CheckResult]:
-    """Check all signal-layer tracks against MIL minimum width."""
+def check_track_widths(tracks: list[dict[str, Any]], net_map: dict[int, str]) -> list[CheckResult]:
+    """Check tracks against MIL minimum width, differentiating signal vs power."""
     if not tracks:
         return [CheckResult("Track widths", False, "No track segments found in PCB")]
-    # Only flag external/signal layers (MIL-STD-275E applies to external conductors)
-    signal_tracks = [t for t in tracks if t["layer"] in REQUIRED_SIGNAL_LAYERS]
-    violations = [t for t in signal_tracks if t["width"] < settings.min_track_width_mm]
-    if not violations:
-        widths = [t["width"] for t in signal_tracks]
-        return [
+
+    # Only flag external/signal layers
+    external_tracks = [t for t in tracks if t["layer"] in REQUIRED_SIGNAL_LAYERS]
+    results = []
+
+    # 1. Signal Track Widths
+    signal_violations = []
+    power_violations = []
+
+    for t in external_tracks:
+        net_name = net_map.get(t["net"], "")
+        is_power = any(p in net_name.upper() for p in ["VCC", "VDD", "5V", "3V3", "BAT", "RAW"])
+        limit = 0.5 if is_power else settings.min_track_width_mm
+
+        if t["width"] < limit:
+            if is_power:
+                power_violations.append(t)
+            else:
+                signal_violations.append(t)
+
+    # Report Signal
+    if not signal_violations:
+        results.append(
             CheckResult(
-                "Track widths (signal layers)",
+                "Signal track widths",
                 True,
-                f"{len(signal_tracks)} tracks; min {min(widths) if widths else 0:.4f} mm "
-                f">= {settings.min_track_width_mm} mm (MIL-STD-275E)",
+                f"All signal tracks >= {settings.min_track_width_mm} mm (MIL-STD-275E)",
             )
-        ]
-    by_width: dict[float, int] = {}
-    for t in violations:
-        by_width[t["width"]] = by_width.get(t["width"], 0) + 1
-    detail = ", ".join(f"{w:.4f}mm ×{c}" for w, c in sorted(by_width.items()))
-    return [
-        CheckResult(
-            "Track widths (signal layers)",
-            False,
-            f"{len(violations)} track(s) on signal layers below {settings.min_track_width_mm} mm: "
-            f"{detail}  [MIL-STD-275E: >= {settings.min_track_width_mm} mm]",
         )
-    ]
+    else:
+        results.append(
+            CheckResult(
+                "Signal track widths",
+                False,
+                f"{len(signal_violations)} violation(s); min {min(t['width'] for t in signal_violations):.3f} mm",
+            )
+        )
+
+    # Report Power
+    if not power_violations:
+        results.append(CheckResult("Power track widths", True, "Power tracks meet width targets"))
+    else:
+        results.append(
+            CheckResult(
+                "Power track widths",
+                False,
+                f"{len(power_violations)} power track(s) below recommended 0.5mm for current",
+            )
+        )
+
+    return results
 
 
 def check_gnd_stitching(vias: list[dict[str, float]], zones: list[dict[str, str]]) -> CheckResult:
@@ -301,13 +338,14 @@ def main(pcb_file: str) -> int:
     zones = parser.get_zones()
     vias = parser.get_vias()
     tracks = parser.get_tracks()
+    net_map = parser.get_net_map()
     edge_cuts_present = parser.has_edge_cuts()
 
     all_results: list[CheckResult] = []
     all_results.append(check_stackup(layers))
     all_results.append(check_gnd_inner_zone(zones))
     all_results += check_vias(vias)
-    all_results += check_track_widths(tracks)
+    all_results += check_track_widths(tracks, net_map)
     all_results.append(check_gnd_stitching(vias, zones))
     all_results.append(
         CheckResult(
