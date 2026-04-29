@@ -36,7 +36,7 @@ jobs:
 
       - name: Install Linting Tools
         run: |
-          pip install ruff mypy numpy scipy matplotlib
+          pip install ruff mypy numpy scipy matplotlib pydantic pydantic-settings sexpdata
 
       - name: Run Ruff Check
         run: ruff check scripts/

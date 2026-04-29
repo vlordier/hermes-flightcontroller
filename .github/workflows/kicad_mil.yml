@@ -187,8 +187,8 @@ jobs:
           # model directory and exits gracefully.
           if command -v gerber2ems >/dev/null 2>&1; then
             gerber2ems \
-              PCB/HermesFC/manufacturing/ \
-              --output em_sim/ \
+              -i PCB/HermesFC/manufacturing/ \
+              -o em_sim/ \
               --layers F.Cu,B.Cu,In1.Cu,In2.Cu
           else
             echo "gerber2ems not available — skipping Gerber-to-openEMS conversion."
@@ -281,7 +281,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends python3 python3-pip
-          python3 -m pip install doorstop
+          python3 -m pip install doorstop pydantic pydantic-settings sexpdata --break-system-packages
 
       - name: Verify Requirements Traceability (Doorstop)
         run: |
