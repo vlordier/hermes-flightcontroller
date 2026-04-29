@@ -19,11 +19,12 @@ Usage:
 
 from __future__ import annotations
 
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import sexpdata
 
 try:
     from .config import settings
@@ -48,99 +49,84 @@ class CheckResult:
         return f"  {tag}  {self.name}: {self.detail}"
 
 
-# ── S-expression helpers ──────────────────────────────────────────────────────
+# ── S-expression parser (Modern) ──────────────────────────────────────────────
 
 
-def _get_layers(text: str) -> dict[str, str]:
-    """Return {layer_name: layer_type} for all copper layers."""
-    results: dict[str, str] = {}
-    for m in re.finditer(
-        r'\(\d+ "([^"]+)" (signal|power|mixed|user)',
-        text,
-    ):
-        results[m.group(1)] = m.group(2)
-    return results
+class PcbParser:
+    """Robust PCB parser using sexpdata to avoid brittle regex matching."""
 
+    def __init__(self, text: str) -> None:
+        self.data = sexpdata.loads(text)
 
-def _get_zones(text: str) -> list[dict[str, str]]:
-    """Return list of {net_name, layer} for every zone block.
+    def get_layers(self) -> dict[str, str]:
+        """Return {layer_name: layer_type} for all copper layers."""
+        layers = {}
+        # (layers (0 "F.Cu" signal) ...)
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("layers") == item[0]:
+                for layer_def in item[1:]:
+                    if isinstance(layer_def, list):
+                        layer_name = layer_def[1]
+                        layer_type = str(layer_def[2])
+                        layers[layer_name] = layer_type
+                break
+        return layers
 
-    The lookahead ``(?=(...))`` delimits each zone block at the start of the
-    next top-level S-expression directive (footprint, via, segment, gr_*, zone,
-    setup, or net declaration).  This avoids the cross-block false-match that
-    occurs when using a naively greedy ``.*?`` across an entire file.
-    Recognised delimiters: footprint, via, segment, gr_, zone, setup, net.
-    """
-    # Top-level directives that can follow a zone block in .kicad_pcb files
-    zone_delimiters = r"footprint|via|segment|gr_|zone|setup|net\s"
-    zones: list[dict[str, str]] = []
-    for block in re.finditer(
-        rf"\(zone\b(.*?)\n\s*(?=\((?:{zone_delimiters}|\Z))",
-        text,
-        re.DOTALL,
-    ):
-        chunk = block.group(0)
-        net = re.search(r'\(net_name "([^"]*)"\)', chunk)
-        layer = re.search(r'\(layer "([^"]*)"\)', chunk)
-        zones.append(
-            {
-                "net_name": net.group(1) if net else "",
-                "layer": layer.group(1) if layer else "",
-            }
-        )
-    return zones
+    def get_zones(self) -> list[dict[str, str]]:
+        """Return list of {net_name, layer} for every zone block."""
+        zones = []
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("zone") == item[0]:
+                zone_info = {"net_name": "", "layer": ""}
+                for prop in item:
+                    if isinstance(prop, list):
+                        if sexpdata.Symbol("net_name") == prop[0]:
+                            zone_info["net_name"] = prop[1]
+                        elif sexpdata.Symbol("layer") == prop[0]:
+                            zone_info["layer"] = prop[1]
+                zones.append(zone_info)
+        return zones
 
+    def get_vias(self) -> list[dict[str, float]]:
+        """Return list of {drill, size} for every via."""
+        vias = []
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("via") == item[0]:
+                via_info = {"size": 0.0, "drill": 0.0}
+                for prop in item:
+                    if isinstance(prop, list):
+                        if sexpdata.Symbol("size") == prop[0]:
+                            via_info["size"] = float(prop[1])
+                        elif sexpdata.Symbol("drill") == prop[0]:
+                            via_info["drill"] = float(prop[1])
+                vias.append(via_info)
+        return vias
 
-def _get_vias(text: str) -> list[dict[str, float]]:
-    """Return list of {drill, size} for every via.
+    def get_tracks(self) -> list[dict[str, Any]]:
+        """Return list of {width, layer} for every track segment."""
+        tracks = []
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("segment") == item[0]:
+                track_info = {"width": 0.0, "layer": ""}
+                for prop in item:
+                    if isinstance(prop, list):
+                        if sexpdata.Symbol("width") == prop[0]:
+                            track_info["width"] = float(prop[1])
+                        elif sexpdata.Symbol("layer") == prop[0]:
+                            track_info["layer"] = prop[1]
+                tracks.append(track_info)
+        return tracks
 
-    KiCad 8 via format::
-
-        (via
-            (at ...)
-            (size 0.6)
-            (drill 0.3)
-            ...
-        )
-    """
-    vias = []
-    # Match via blocks and extract size/drill
-    # Using a more robust regex that allows indentation
-    via_pattern = r"\(via\s+.*?\s*\(size ([\d.]+)\)\s*\(drill ([\d.]+)\)"
-    for block in re.finditer(via_pattern, text, re.DOTALL):
-        vias.append(
-            {
-                "size": float(block.group(1)),
-                "drill": float(block.group(2)),
-            }
-        )
-    return vias
-
-
-def _get_tracks(text: str) -> list[dict[str, Any]]:
-    """Return list of {width, layer} for every track segment.
-
-    KiCad 8 segment format::
-
-        (segment
-            (start ...)
-            (end ...)
-            (width 0.2)
-            (layer "F.Cu")
-            ...
-        )
-    """
-    pairs = re.findall(
-        r"\(segment\n[^(]+\(start [^)]+\)\n[^(]+\(end [^)]+\)\n"
-        r"[^(]+\(width ([\d.]+)\)\n[^(]+\(layer \"([^\"]+)\"",
-        text,
-    )
-    return [{"width": float(w), "layer": layer} for w, layer in pairs]
-
-
-def _has_edge_cuts(text: str) -> bool:
-    """Return True if the board has an Edge.Cuts outline."""
-    return bool(re.search(r'"Edge\.Cuts"', text))
+    def has_edge_cuts(self) -> bool:
+        """Return True if an Edge.Cuts segment/drawing exists."""
+        for item in self.data:
+            # gr_line, gr_arc, gr_circle etc.
+            if isinstance(item, list) and str(item[0]).startswith("gr_"):
+                for prop in item:
+                    if isinstance(prop, list) and sexpdata.Symbol("layer") == prop[0]:
+                        if prop[1] == "Edge.Cuts":
+                            return True
+        return False
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
@@ -285,7 +271,9 @@ def check_gnd_stitching(vias: list[dict[str, float]], zones: list[dict[str, str]
 
 def check_edge_cuts(text: str) -> CheckResult:
     """Verify board outline is present."""
-    present = _has_edge_cuts(text)
+    # This function is now legacy, replaced by PcbParser.has_edge_cuts()
+    # Keeping it as a placeholder if needed for other scripts.
+    present = '"Edge.Cuts"' in text
     return CheckResult(
         "Board outline (Edge.Cuts)",
         present,
@@ -307,10 +295,13 @@ def main(pcb_file: str) -> int:
         print(f"[PCB-CHECK] Not a valid KiCad PCB file: {pcb_file}")
         return 1
 
-    layers = _get_layers(text)
-    zones = _get_zones(text)
-    vias = _get_vias(text)
-    tracks = _get_tracks(text)
+    parser = PcbParser(text)
+
+    layers = parser.get_layers()
+    zones = parser.get_zones()
+    vias = parser.get_vias()
+    tracks = parser.get_tracks()
+    edge_cuts_present = parser.has_edge_cuts()
 
     all_results: list[CheckResult] = []
     all_results.append(check_stackup(layers))
@@ -318,7 +309,13 @@ def main(pcb_file: str) -> int:
     all_results += check_vias(vias)
     all_results += check_track_widths(tracks)
     all_results.append(check_gnd_stitching(vias, zones))
-    all_results.append(check_edge_cuts(text))
+    all_results.append(
+        CheckResult(
+            "Board outline (Edge.Cuts)",
+            edge_cuts_present,
+            "Edge.Cuts outline present" if edge_cuts_present else "No Edge.Cuts outline found",
+        )
+    )
 
     print(f"[PCB-CHECK] Results for {path.name}:")
     for r in all_results:
