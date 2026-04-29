@@ -41,3 +41,7 @@ $RECYCLE.BIN/
 .idea/
 *.swp
 *.swo
+
+# Python bytecode
+__pycache__/
+*.py[cod]
