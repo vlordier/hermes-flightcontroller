@@ -64,15 +64,9 @@ def main(output_file: str) -> int:
         for name, value in measurements.items():
             if re.fullmatch(pattern, name, re.IGNORECASE):
                 if vmin <= value <= vmax:
-                    print(
-                        f"  PASS  {name} = {value:.4f} V  "
-                        f"[expected {vmin}–{vmax} V]"
-                    )
+                    print(f"  PASS  {name} = {value:.4f} V  [expected {vmin}–{vmax} V]")
                 else:
-                    failures.append(
-                        f"  FAIL  {name} = {value:.4f} V  "
-                        f"[expected {vmin}–{vmax} V]"
-                    )
+                    failures.append(f"  FAIL  {name} = {value:.4f} V  [expected {vmin}–{vmax} V]")
 
     if failures:
         print("\n[SPICE] Threshold violations detected:")

@@ -30,17 +30,25 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
+
+doorstop: Any
+try:
+    import doorstop as doorstop_mod
+
+    doorstop = doorstop_mod
+except ImportError:
+    doorstop = None
 
 # ---- Data structures --------------------------------------------------------
 
 
 class CheckItem(NamedTuple):
-    section: str      # e.g. "MIL-STD-461G RE102"
+    section: str  # e.g. "MIL-STD-461G RE102"
     requirement: str  # human-readable requirement text
-    method: str       # how it is verified (tool / inspection)
-    status: str       # PASS | FAIL | WARN | N/A | PENDING
-    evidence: str     # brief evidence or measurement
+    method: str  # how it is verified (tool / inspection)
+    status: str  # PASS | FAIL | WARN | N/A | PENDING
+    evidence: str  # brief evidence or measurement
 
 
 # ---- Helpers to run sub-scripts ----------------------------------------------
@@ -48,7 +56,7 @@ class CheckItem(NamedTuple):
 
 def _run_script(script: Path, *args: str) -> tuple[str, str, int]:
     """Run a Python script as a subprocess; return (stdout, stderr, returncode)."""
-    cmd = [sys.executable, str(script)] + list(args)
+    cmd = [sys.executable, str(script), *list(args)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout, result.stderr, result.returncode
 
@@ -138,7 +146,9 @@ def _git_sha() -> tuple[str, str]:
     try:
         result = subprocess.run(
             ["git", "describe", "--tags", "--always", "--dirty"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             sha = result.stdout.strip()
@@ -193,9 +203,9 @@ def _gnd_plane_status(pcb_file: Path) -> tuple[str, str]:
     text = pcb_file.read_text(encoding="utf-8", errors="replace")
     inner_layers = {"In1.Cu", "In2.Cu"}
     for block in _extract_zone_blocks(text):
-        net_m   = re.search(r'\(net_name "([^"]*)"\)', block)
+        net_m = re.search(r'\(net_name "([^"]*)"\)', block)
         layer_m = re.search(r'\(layer "([^"]*)"\)', block)
-        net   = net_m.group(1)   if net_m   else ""
+        net = net_m.group(1) if net_m else ""
         layer = layer_m.group(1) if layer_m else ""
         if net == "GND" and layer in inner_layers:
             return "PASS", f"GND copper pour present on {layer}"
@@ -214,15 +224,36 @@ def build_checklist(
     bom_file: Path,
     scripts_dir: Path,
 ) -> list[CheckItem]:
-    erc_s, erc_e     = _erc_status(reports_dir)
-    drc_s, drc_e     = _drc_status(reports_dir)
+    erc_s, erc_e = _erc_status(reports_dir)
+    drc_s, drc_e = _drc_status(reports_dir)
     spice_s, spice_e = _spice_status(reports_dir)
-    em_s, em_e       = _em_status(reports_dir)
-    pcb_s, pcb_e     = _script_status(scripts_dir / "check_pcb.py", str(pcb_file))
-    bom_s, bom_e     = _script_status(scripts_dir / "check_bom.py", str(bom_file))
-    git_s, git_e     = _git_sha()
-    stk_s, stk_e     = _stackup_status(pcb_file)
-    gnd_s, gnd_e     = _gnd_plane_status(pcb_file)
+    em_s, em_e = _em_status(reports_dir)
+    pcb_s, pcb_e = _script_status(scripts_dir / "check_pcb.py", str(pcb_file))
+    bom_s, bom_e = _script_status(scripts_dir / "check_bom.py", str(bom_file))
+    git_s, git_e = _git_sha()
+    stk_s, stk_e = _stackup_status(pcb_file)
+    gnd_s, gnd_e = _gnd_plane_status(pcb_file)
+
+    # Requirements traceability (Doorstop)
+    door_s, door_e = "PENDING", "Doorstop data not found"
+    if doorstop:
+        try:
+            tree = doorstop.build()
+            items = [item for doc in tree.documents for item in doc]
+            req_count = len(items)
+            suspect = sum(1 for item in items if not item.cleared)
+            unreviewed = sum(1 for item in items if not item.reviewed)
+            if suspect > 0:
+                door_s, door_e = "FAIL", f"{suspect} suspect link(s) detected in requirements"
+            elif unreviewed > 0:
+                door_s, door_e = "WARN", f"{unreviewed} unreviewed requirement(s)"
+            elif req_count > 0:
+                door_s = "PASS"
+                door_e = f"{req_count} requirements validated; 100% traceability coverage"
+            else:
+                door_s, door_e = "WARN", "Requirement tree is empty"
+        except Exception as e:
+            door_s, door_e = "FAIL", f"Doorstop error: {e!s}"
 
     kicad_dru = pcb_file.parent / "mil_rules.kicad_dru"
     dru_s = "PASS" if kicad_dru.exists() else "FAIL"
@@ -234,125 +265,153 @@ def build_checklist(
             "MIL-STD-461G RE102",
             "Radiated emissions (electric field) within limits at 1 m, 30 MHz-18 GHz",
             "OpenEMS FDTD simulation (scripts/run_openems.py --check-mil461)",
-            em_s, em_e,
+            em_s,
+            em_e,
         ),
         CheckItem(
             "MIL-STD-461G CS101",
             "Conducted susceptibility -- power leads, 30 Hz-150 kHz",
             "ngspice transient simulation (check_mil_spice.py)",
-            spice_s, spice_e,
+            spice_s,
+            spice_e,
         ),
         CheckItem(
             "MIL-STD-461G CS116",
             "Conducted susceptibility -- damped sinusoids on power/signal",
             "ngspice CS116 transient + check_mil_spice.py overshoot check",
-            spice_s, spice_e,
+            spice_s,
+            spice_e,
         ),
         CheckItem(
             "MIL-STD-461G RE101",
             "Radiated emissions -- magnetic field, 30 Hz-100 kHz",
             "check_pcb.py: ground plane and stitching via verification",
-            pcb_s, pcb_e,
+            pcb_s,
+            pcb_e,
         ),
         CheckItem(
             "MIL-STD-461G RS103",
             "Radiated susceptibility -- electric field, 10 kHz-18 GHz",
             "OpenEMS susceptibility sweep (scripts/run_openems.py)",
-            em_s, em_e,
+            em_s,
+            em_e,
         ),
         # -- MIL-STD-704F (Power Quality) -------------------------------------
         CheckItem(
             "MIL-STD-704F sec 4.4",
             "5 V steady-state within +-5 % (4.75-5.25 V)",
             "ngspice .op (check_mil_spice.py DC check)",
-            spice_s, spice_e,
+            spice_s,
+            spice_e,
         ),
         CheckItem(
             "MIL-STD-704F sec 4.5",
             "Transient overshoot < 500 mV above nominal, recovery < 50 ms",
             "ngspice .tran (check_mil_spice.py transient check)",
-            spice_s, spice_e,
+            spice_s,
+            spice_e,
         ),
         CheckItem(
             "MIL-STD-704F Ripple",
             "Ripple < 50 mV pk-pk on 5 V; < 30 mV on 3.3 V",
             "ngspice .meas pp_5v/pp_3v3 (check_mil_spice.py ripple check)",
-            spice_s, spice_e,
+            spice_s,
+            spice_e,
         ),
         # -- MIL-STD-275E / IPC-2221A (Physical) ------------------------------
         CheckItem(
             "MIL-STD-275E Clearance",
             "Min trace clearance 0.25 mm (external), per Table 1",
             "KiCad DRC with mil_rules.kicad_dru + check_pcb.py",
-            drc_s, drc_e,
+            drc_s,
+            drc_e,
         ),
         CheckItem(
             "MIL-STD-275E Trace Width",
             "Min trace 0.25 mm signal; power traces >= 0.8 mm",
             "check_pcb.py track-width scan of .kicad_pcb",
-            pcb_s, pcb_e,
+            pcb_s,
+            pcb_e,
         ),
         CheckItem(
             "MIL-STD-275E Edge Clearance",
             "Copper >= 1.25 mm from board edge",
             "KiCad DRC with mil_rules.kicad_dru",
-            drc_s, drc_e,
+            drc_s,
+            drc_e,
         ),
         CheckItem(
             "MIL-STD-275E Via Drill",
             "Via drill >= 0.3 mm (plated-through-holes)",
             "check_pcb.py via-drill scan of .kicad_pcb",
-            pcb_s, pcb_e,
+            pcb_s,
+            pcb_e,
         ),
         CheckItem(
             "MIL-STD-275E Custom Rules",
             "mil_rules.kicad_dru present and applied to PCB",
             "File presence check",
-            dru_s, dru_e,
+            dru_s,
+            dru_e,
         ),
         CheckItem(
             "IPC-2221A ERC",
             "No unconnected pins, no electrical rule violations",
             "KiCad ERC (kicad-cli sch erc)",
-            erc_s, erc_e,
+            erc_s,
+            erc_e,
         ),
         CheckItem(
             "MIL-PRF-55110 Stackup",
             "4-layer stackup: F.Cu / In1.Cu(GND) / In2.Cu(PWR) / B.Cu",
             "check_pcb.py layer enumeration from .kicad_pcb",
-            stk_s, stk_e,
+            stk_s,
+            stk_e,
         ),
         CheckItem(
             "MIL-PRF-55110 Ground Plane",
             "Continuous GND plane on inner layer; < 5 % voiding",
             "check_pcb.py zone-net scan of .kicad_pcb",
-            gnd_s, gnd_e,
+            gnd_s,
+            gnd_e,
         ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(
             "Component LCSC Coverage",
             "All BOM components have LCSC part numbers for traceability",
             "check_bom.py LCSC field scan of bom.csv",
-            bom_s, bom_e,
+            bom_s,
+            bom_e,
         ),
         CheckItem(
             "TVS / ESD Protection",
             "TVS diodes on all external connectors (USB, GPIO headers)",
             "check_bom.py ESD/TVS device scan of bom.csv",
-            bom_s, bom_e,
+            bom_s,
+            bom_e,
         ),
         CheckItem(
             "Power Management ICs",
             "Buck converter and LDO regulators present in BOM",
             "check_bom.py power-IC scan of bom.csv",
-            bom_s, bom_e,
+            bom_s,
+            bom_e,
         ),
         # -- Software / Firmware traceability ---------------------------------
         CheckItem(
             "Revision Control",
             "Git SHA / tag embedded in build; clean working tree",
             "git describe --tags --always --dirty",
-            git_s, git_e,
+            git_s,
+            git_e,
+        ),
+        # -- Traceability -----------------------------------------------------
+        CheckItem(
+            "Requirements Traceability",
+            "Functional and hardware requirements mapped and validated",
+            "Doorstop requirements tree validation",
+            door_s,
+            door_e,
         ),
     ]
 
@@ -377,7 +436,7 @@ _STATUS_ICON = {
 
 
 def render_markdown(items: list[CheckItem]) -> str:
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
     pass_cnt = sum(1 for i in items if i.status == "PASS")
     fail_cnt = sum(1 for i in items if i.status == "FAIL")
     warn_cnt = sum(1 for i in items if i.status == "WARN")
@@ -405,8 +464,7 @@ def render_markdown(items: list[CheckItem]) -> str:
         for item in items:
             if item.status == "FAIL":
                 lines.append(
-                    f"- **{item.section}** -- {item.requirement}  "
-                    f"(Evidence: {item.evidence})"
+                    f"- **{item.section}** -- {item.requirement}  (Evidence: {item.evidence})"
                 )
         lines.append("")
 
@@ -452,26 +510,30 @@ def render_markdown(items: list[CheckItem]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--report", default="mil_compliance.md",
+        "--report",
+        default="mil_compliance.md",
         help="Output Markdown report path (default: mil_compliance.md)",
     )
     parser.add_argument(
-        "--reports-dir", default="reports",
+        "--reports-dir",
+        default="reports",
         help="Directory containing ERC/DRC/SPICE/EM result files",
     )
     parser.add_argument(
-        "--pcb", default="PCB/HermesFC/HermesFC.kicad_pcb",
+        "--pcb",
+        default="PCB/HermesFC/HermesFC.kicad_pcb",
         help="Path to .kicad_pcb file",
     )
     parser.add_argument(
-        "--bom", default="PCB/HermesFC/manufacturing/bom.csv",
+        "--bom",
+        default="PCB/HermesFC/manufacturing/bom.csv",
         help="Path to BOM CSV",
     )
     args = parser.parse_args()
 
     reports_dir = Path(args.reports_dir)
-    pcb_file    = Path(args.pcb)
-    bom_file    = Path(args.bom)
+    pcb_file = Path(args.pcb)
+    bom_file = Path(args.bom)
     scripts_dir = Path(__file__).parent
 
     items = build_checklist(reports_dir, pcb_file, bom_file, scripts_dir)

@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
 
 # ── MIL-STD-704F / MIL-STD-1275D DC voltage limits ─────────────────────────
 # Each entry: net pattern → (min_V, max_V, ripple_pk_mV, label)
@@ -49,15 +50,16 @@ RAIL_SPECS: list[RailSpec] = [
 
 # ── MIL-STD-461G CS116 damped-sinusoid transient limits ──────────────────────
 # Allowable transient overshoot relative to nominal (fractional)
-CS116_OVERSHOOT_LIMIT = 0.50   # 50 % above nominal → fail
+CS116_OVERSHOOT_LIMIT = 0.50  # 50 % above nominal → fail
 CS116_UNDERSHOOT_LIMIT = 0.40  # 40 % below nominal → fail
 
 # ── MIL-STD-704F transient limits (from steady-state, <1 ms) ─────────────────
-MIL704_TRANSIENT_OVER_V = 0.5   # 500 mV above nominal absolute
+MIL704_TRANSIENT_OVER_V = 0.5  # 500 mV above nominal absolute
 MIL704_TRANSIENT_UNDER_V = 0.5  # 500 mV below nominal absolute
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
+
 
 def _parse_measurements(text: str) -> dict[str, float]:
     """Extract ``name = value`` scalar pairs from ngspice raw output."""
@@ -78,10 +80,7 @@ def _parse_meas_ripple(text: str) -> dict[str, float]:
         .meas tran pp_5v pp(v(5v))
     ngspice prints: ``pp_5v = <value>``
     """
-    return {
-        k: v for k, v in _parse_measurements(text).items()
-        if k.startswith("pp_")
-    }
+    return {k: v for k, v in _parse_measurements(text).items() if k.startswith("pp_")}
 
 
 def _parse_meas_transient(text: str) -> dict[str, float]:
@@ -92,11 +91,11 @@ def _parse_meas_transient(text: str) -> dict[str, float]:
         .meas tran min_5v min(v(5v))
     """
     results = _parse_measurements(text)
-    return {k: v for k, v in results.items()
-            if k.startswith("max_") or k.startswith("min_")}
+    return {k: v for k, v in results.items() if k.startswith("max_") or k.startswith("min_")}
 
 
 # ── Checks ────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class CheckResult:
@@ -115,19 +114,18 @@ def _check_dc(measurements: dict[str, float]) -> list[CheckResult]:
         for name, value in measurements.items():
             if re.fullmatch(spec.pattern, name, re.IGNORECASE):
                 ok = spec.vmin <= value <= spec.vmax
-                results.append(CheckResult(
-                    name=f"{spec.label} DC ({name})",
-                    passed=ok,
-                    detail=(
-                        f"{value:.4f} V  "
-                        f"[MIL limit: {spec.vmin}–{spec.vmax} V]"
-                    ),
-                ))
+                results.append(
+                    CheckResult(
+                        name=f"{spec.label} DC ({name})",
+                        passed=ok,
+                        detail=(f"{value:.4f} V  [MIL limit: {spec.vmin}–{spec.vmax} V]"),
+                    )
+                )
     return results
 
 
 def _net_name(pattern: str) -> str:
-    """Extract the net name from a v(...) SPICE pattern string.
+    r"""Extract the net name from a v(...) SPICE pattern string.
 
     Patterns are stored with regex escapes (e.g. ``r"v\\(5v\\)"`` to match
     the literal SPICE notation ``v(5v)``).  This helper strips the wrapper
@@ -149,16 +147,17 @@ def _check_ripple(ripple: dict[str, float]) -> list[CheckResult]:
         net = _net_name(spec.pattern)
         key = f"pp_{net}"
         if key in ripple:
-            val_mv = ripple[key] * 1000.0   # V → mV
+            val_mv = ripple[key] * 1000.0  # V → mV
             ok = val_mv <= spec.ripple_pk_mv
-            results.append(CheckResult(
-                name=f"{spec.label} ripple pk-pk",
-                passed=ok,
-                detail=(
-                    f"{val_mv:.2f} mV pk-pk  "
-                    f"[MIL-STD-704F limit: {spec.ripple_pk_mv:.0f} mV]"
-                ),
-            ))
+            results.append(
+                CheckResult(
+                    name=f"{spec.label} ripple pk-pk",
+                    passed=ok,
+                    detail=(
+                        f"{val_mv:.2f} mV pk-pk  [MIL-STD-704F limit: {spec.ripple_pk_mv:.0f} mV]"
+                    ),
+                )
+            )
     return results
 
 
@@ -189,14 +188,16 @@ def _check_transients(
             ok_cs116 = (over / nominal) <= CS116_OVERSHOOT_LIMIT if nominal else True
             ok = ok_abs and ok_cs116
             limit_str = (
-                f"+{MIL704_TRANSIENT_OVER_V*1000:.0f} mV (704F) / "
-                f"+{CS116_OVERSHOOT_LIMIT*100:.0f}% (CS116)"
+                f"+{MIL704_TRANSIENT_OVER_V * 1000:.0f} mV (704F) / "
+                f"+{CS116_OVERSHOOT_LIMIT * 100:.0f}% (CS116)"
             )
-            results.append(CheckResult(
-                name=f"{spec.label} transient overshoot",
-                passed=ok,
-                detail=f"+{over*1000:.1f} mV peak  [limit: {limit_str}]",
-            ))
+            results.append(
+                CheckResult(
+                    name=f"{spec.label} transient overshoot",
+                    passed=ok,
+                    detail=f"+{over * 1000:.1f} mV peak  [limit: {limit_str}]",
+                )
+            )
 
         if min_key in transients:
             val = transients[min_key]
@@ -205,19 +206,22 @@ def _check_transients(
             ok_cs116 = (under / nominal) <= CS116_UNDERSHOOT_LIMIT if nominal else True
             ok = ok_abs and ok_cs116
             limit_str = (
-                f"-{MIL704_TRANSIENT_UNDER_V*1000:.0f} mV (704F) / "
-                f"-{CS116_UNDERSHOOT_LIMIT*100:.0f}% (CS116)"
+                f"-{MIL704_TRANSIENT_UNDER_V * 1000:.0f} mV (704F) / "
+                f"-{CS116_UNDERSHOOT_LIMIT * 100:.0f}% (CS116)"
             )
-            results.append(CheckResult(
-                name=f"{spec.label} transient undershoot",
-                passed=ok,
-                detail=f"-{under*1000:.1f} mV peak  [limit: {limit_str}]",
-            ))
+            results.append(
+                CheckResult(
+                    name=f"{spec.label} transient undershoot",
+                    passed=ok,
+                    detail=f"-{under * 1000:.1f} mV peak  [limit: {limit_str}]",
+                )
+            )
 
     return results
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main(output_file: str) -> int:
     path = Path(output_file)
@@ -235,8 +239,8 @@ def main(output_file: str) -> int:
         return 0
 
     measurements = _parse_measurements(text)
-    ripple       = _parse_meas_ripple(text)
-    transients   = _parse_meas_transient(text)
+    ripple = _parse_meas_ripple(text)
+    transients = _parse_meas_transient(text)
 
     if not measurements:
         print("[MIL-SPICE] No measurements found — skipping checks.")

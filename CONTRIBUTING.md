@@ -10,6 +10,17 @@ documentation, and firmware (when it arrives) are all welcome.
 2. Make your changes, following the guidelines below.
 3. Open a **Pull Request** with a clear description of what you changed and why.
 
+## Development Environment
+
+This project uses `uv` for Python dependency management and `Taskfile` for orchestration.
+
+1. **Install uv**: Follow instructions at [astral.sh/uv](https://astral.sh/uv).
+2. **Setup**: Run `uv sync` to install dependencies.
+3. **Tasks**: Use `go-task` (or `task`) to run common workflows:
+   - `task lint`: Run Ruff and MyPy.
+   - `task test`: Run unit tests with coverage.
+   - `task validate`: Run MIL-SPEC compliance checks.
+
 ## KiCad Design Guidelines
 
 - Use **KiCad 7** or later.

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,13 +34,13 @@ from pathlib import Path
 # — actual RE101 (magnetic field) limits apply below 100 kHz.
 # Frequency (Hz) → limit (dBµV/m)
 RE102_LIMITS: list[tuple[float, float]] = [
-    (1.0e4,   24.0),   #  10 kHz  — RE101/RE102 transition (extrapolation anchor)
-    (1.5e5,   24.0),   # 150 kHz
-    (2.0e6,   34.0),   #   2 MHz
-    (3.0e7,   34.0),   #  30 MHz  — RE102 lower bound (Army/Navy ground)
-    (1.0e8,   44.0),   # 100 MHz
-    (2.0e9,   54.0),   #   2 GHz
-    (1.8e10,  54.0),   #  18 GHz  — RE102 upper bound
+    (1.0e4, 24.0),  #  10 kHz  — RE101/RE102 transition (extrapolation anchor)
+    (1.5e5, 24.0),  # 150 kHz
+    (2.0e6, 34.0),  #   2 MHz
+    (3.0e7, 34.0),  #  30 MHz  — RE102 lower bound (Army/Navy ground)
+    (1.0e8, 44.0),  # 100 MHz
+    (2.0e9, 54.0),  #   2 GHz
+    (1.8e10, 54.0),  #  18 GHz  — RE102 upper bound
 ]
 
 # ── RS103 susceptibility threshold (dBµV/m, electric field immunity) ─────────
@@ -105,7 +104,9 @@ def _run_fdtd_simulation(model_dir: Path) -> Path | None:
     if run_script.exists():
         # Octave/MATLAB interface
         cmd = [
-            "octave", "--no-gui", "--eval",
+            "octave",
+            "--no-gui",
+            "--eval",
             f"cd('{model_dir}'); run_openems;",
         ]
     else:
@@ -152,12 +153,12 @@ def _check_re102(data: list[tuple[float, float]]) -> list[str]:
         margin = field - limit
         if margin > 0:
             failures.append(
-                f"  FAIL  RE102 @ {freq/1e6:.3f} MHz: "
+                f"  FAIL  RE102 @ {freq / 1e6:.3f} MHz: "
                 f"{field:.1f} dBµV/m  [limit {limit:.1f}  margin {margin:+.1f} dB]"
             )
         else:
             print(
-                f"  PASS  RE102 @ {freq/1e6:.3f} MHz: "
+                f"  PASS  RE102 @ {freq / 1e6:.3f} MHz: "
                 f"{field:.1f} dBµV/m  [limit {limit:.1f}  margin {margin:+.1f} dB]"
             )
     return failures
@@ -182,8 +183,8 @@ def main() -> int:
     # ── Model directory availability ─────────────────────────────────────────
     if not model_dir.exists() or not any(model_dir.iterdir()):
         print(
-            "[EM] No EM model found in '{}'. "
-            "Run gerber2ems first to convert Gerbers to an openEMS model.".format(model_dir)
+            f"[EM] No EM model found in '{model_dir}'. "
+            "Run gerber2ems first to convert Gerbers to an openEMS model."
         )
         return 0
 

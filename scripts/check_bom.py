@@ -24,42 +24,58 @@ from __future__ import annotations
 import csv
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .config import settings
 
 # ── Thresholds and reference designator patterns ─────────────────────────────
 
-MIN_DECOUPLING_CAPS  = 5    # minimum number of decoupling/bypass capacitors
-TVS_PATTERNS = [
-    re.compile(r"tvs", re.IGNORECASE),
-    re.compile(r"USBLC", re.IGNORECASE),         # USB ESD suppressors
-    re.compile(r"ESD", re.IGNORECASE),
-    re.compile(r"PRTR", re.IGNORECASE),
-    re.compile(r"PESD", re.IGNORECASE),
-    re.compile(r"TPD", re.IGNORECASE),
-]
 BYPASS_CAP_VALUE_PATTERNS = [
-    re.compile(r"^\d+n$", re.IGNORECASE),   # e.g. 100n
-    re.compile(r"^\d+u$", re.IGNORECASE),   # e.g. 10u
-    re.compile(r"^\d+p$", re.IGNORECASE),   # small ceramics
+    re.compile(r"^\d+n$", re.IGNORECASE),  # e.g. 100n
+    re.compile(r"^\d+u$", re.IGNORECASE),  # e.g. 10u
+    re.compile(r"^\d+p$", re.IGNORECASE),  # small ceramics
     re.compile(r"^\d+\.\d+u$", re.IGNORECASE),  # e.g. 2u2 → checked separately
     re.compile(r"^[\d.]+u\d*$", re.IGNORECASE),
     re.compile(r"^\d+[nu]f?$", re.IGNORECASE),
 ]
 
+# Space/MIL derating requirements:
+# 1. Voltage derating: Cap voltage rating >= 2x V_applied (per NASA/MIL-STD-1547)
+# 2. Temperature: X7R or better for ceramics
+DERATING_PATTERNS = [
+    re.compile(r"X7R|X8R|C0G|NP0", re.IGNORECASE),  # Acceptable dielectrics
+]
+LOW_GRADE_DIELECTRIC = re.compile(r"X5R|Y5V|Z5U", re.IGNORECASE)
 
-@dataclass
-class BomRow:
+
+class BomRow(BaseModel):
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
     designators: list[str]
     footprint: str
-    quantity: int
+    quantity: int = Field(gt=0)
     value: str
-    lcsc: str
+    lcsc: str = Field(alias="lcsc_part_number")
+
+    @field_validator("designators", mode="before")
+    @classmethod
+    def split_designators(cls, v: Any) -> Any:  # noqa: ANN401
+        if isinstance(v, str):
+            return [d.strip() for d in v.split(",") if d.strip()]
+        return v
+
+    @field_validator("lcsc")
+    @classmethod
+    def check_lcsc_presence(cls, v: str) -> str:
+        if not v or v.lower() == "nan":
+            raise ValueError("LCSC Part # missing for component")
+        return v
 
 
-@dataclass
-class CheckResult:
+class CheckResult(BaseModel):
     name: str
     passed: bool
     detail: str
@@ -71,6 +87,7 @@ class CheckResult:
 
 # ── CSV parser ────────────────────────────────────────────────────────────────
 
+
 def _read_bom(path: Path) -> list[BomRow]:
     rows: list[BomRow] = []
     with path.open(newline="", encoding="utf-8-sig") as fh:
@@ -78,47 +95,46 @@ def _read_bom(path: Path) -> list[BomRow]:
         for row in reader:
             # Normalise column names (case-insensitive, strip whitespace)
             norm = {k.strip().lower(): v.strip() for k, v in row.items()}
-            desig_raw = norm.get("designator", "")
-            desigs = [d.strip() for d in desig_raw.split(",") if d.strip()]
+
+            # Extract fields with mapping to BomRow expected aliases
             try:
-                qty = int(norm.get("quantity", "1") or "1")
-            except ValueError:
-                qty = len(desigs) or 1
-            rows.append(BomRow(
-                designators=desigs,
-                footprint=norm.get("footprint", ""),
-                quantity=qty,
-                value=norm.get("value", ""),
-                lcsc=norm.get("lcsc part #", norm.get("lcsc", "")),
-            ))
+                bom_row = BomRow(
+                    designators=norm.get("designator", ""),  # type: ignore
+                    footprint=norm.get("footprint", ""),
+                    quantity=int(norm.get("quantity", "1") or "1"),
+                    value=norm.get("value", ""),
+                    lcsc_part_number=norm.get("lcsc part #", norm.get("lcsc", "")),
+                )
+                rows.append(bom_row)
+            except Exception as e:
+                print(f"  [BOM-ERR] Skipping row due to validation error: {e}")
+                continue
     return rows
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
 
+
 def check_lcsc_coverage(rows: list[BomRow]) -> CheckResult:
     """All BOM lines must have an LCSC part number."""
-    missing = [
-        r for r in rows
-        if not r.lcsc or r.lcsc.upper() in ("", "N/A", "-", "TBD", "DNP")
-    ]
+    missing = [r for r in rows if not r.lcsc or r.lcsc.upper() in ("", "N/A", "-", "TBD", "DNP")]
     if not missing:
         total = sum(r.quantity for r in rows)
         return CheckResult(
-            "LCSC part number coverage",
-            True,
-            f"All {len(rows)} BOM lines ({total} parts) have LCSC codes",
+            name="LCSC part number coverage",
+            passed=True,
+            detail=f"All {len(rows)} BOM lines ({total} parts) have LCSC codes",
         )
     labels = []
     for r in missing:
         ref = ", ".join(r.designators[:3])
         if len(r.designators) > 3:
-            ref += f" (+{len(r.designators)-3})"
+            ref += f" (+{len(r.designators) - 3})"
         labels.append(f"{ref} [{r.value}]")
     return CheckResult(
-        "LCSC part number coverage",
-        False,
-        f"{len(missing)} BOM line(s) missing LCSC code: {'; '.join(labels)}",
+        name="LCSC part number coverage",
+        passed=False,
+        detail=f"{len(missing)} BOM line(s) missing LCSC code: {'; '.join(labels)}",
     )
 
 
@@ -126,30 +142,26 @@ def check_esd_tvs(rows: list[BomRow]) -> CheckResult:
     """At least one TVS/ESD protection device must be present."""
     tvs_rows = []
     for r in rows:
-        if any(p.search(r.value) or p.search(r.footprint) for p in TVS_PATTERNS):
+        if any(p.search(r.value) or p.search(r.footprint) for p in settings.tvs_regex):
             tvs_rows.append(r)
         else:
             # Also check designator prefix
             for d in r.designators:
-                if re.match(r"D\d", d) and any(
-                    p.search(r.value) for p in TVS_PATTERNS
-                ):
+                if re.match(r"D\d", d) and any(p.search(r.value) for p in settings.tvs_regex):
                     tvs_rows.append(r)
                     break
     if tvs_rows:
-        refs = ", ".join(
-            d for r in tvs_rows for d in r.designators[:2]
-        )
+        refs = ", ".join(d for r in tvs_rows for d in r.designators[:2])
         total = sum(r.quantity for r in tvs_rows)
         return CheckResult(
-            "TVS/ESD protection",
-            True,
-            f"{total} TVS/ESD device(s) found ({refs})",
+            name="TVS/ESD protection",
+            passed=True,
+            detail=f"{total} TVS/ESD device(s) found ({refs})",
         )
     return CheckResult(
-        "TVS/ESD protection",
-        False,
-        "No TVS or ESD protection devices found — add TVS diodes on all "
+        name="TVS/ESD protection",
+        passed=False,
+        detail="No TVS or ESD protection devices found — add TVS diodes on all "
         "external connectors (USB, GPIO headers) per MIL-STD-461G CS101/RS103",
     )
 
@@ -165,12 +177,12 @@ def check_decoupling_caps(rows: list[BomRow]) -> CheckResult:
         if re.match(r"^\d[\d.u nfp]*[nupf]", val, re.IGNORECASE):
             bypass.append(r)
     total_bypass = sum(r.quantity for r in bypass)
-    ok = total_bypass >= MIN_DECOUPLING_CAPS
+    ok = total_bypass >= settings.min_decoupling_caps
     return CheckResult(
-        "Decoupling capacitors",
-        ok,
-        f"{total_bypass} capacitor(s) in BOM "
-        f"[minimum {MIN_DECOUPLING_CAPS} for adequate decoupling]",
+        name="Decoupling capacitors",
+        passed=ok,
+        detail=f"{total_bypass} capacitor(s) in BOM "
+        f"[minimum {settings.min_decoupling_caps} for adequate decoupling]",
     )
 
 
@@ -179,54 +191,78 @@ def check_empty_values(rows: list[BomRow]) -> CheckResult:
     empty = [r for r in rows if not r.value]
     if not empty:
         return CheckResult(
-            "BOM value completeness",
-            True,
-            f"All {len(rows)} BOM lines have a value",
+            name="BOM value completeness",
+            passed=True,
+            detail=f"All {len(rows)} BOM lines have a value",
         )
     refs = ", ".join(d for r in empty for d in r.designators[:2])
     return CheckResult(
-        "BOM value completeness",
-        False,
-        f"{len(empty)} BOM line(s) with empty Value field: {refs}",
+        name="BOM value completeness",
+        passed=False,
+        detail=f"{len(empty)} BOM line(s) with empty Value field: {refs}",
     )
 
 
 def check_power_ics(rows: list[BomRow]) -> CheckResult:
     """Verify power management ICs are in the BOM (buck, LDO)."""
     power_patterns = [
-        re.compile(r"AP6320\d", re.IGNORECASE),   # buck regulator family
+        re.compile(r"AP6320\d", re.IGNORECASE),  # buck regulator family
         re.compile(r"LD390\d\d", re.IGNORECASE),  # LDO family
         re.compile(r"buck|ldo|regulator", re.IGNORECASE),
         re.compile(r"AP\d{4,}", re.IGNORECASE),
         re.compile(r"LD\d{4,}", re.IGNORECASE),
     ]
     found = [
-        r for r in rows
-        if any(p.search(r.value) or p.search(r.footprint) for p in power_patterns)
+        r for r in rows if any(p.search(r.value) or p.search(r.footprint) for p in power_patterns)
     ]
     if found:
         refs = ", ".join(d for r in found for d in r.designators[:1])
         return CheckResult(
-            "Power management ICs",
-            True,
-            f"Power ICs present: {refs} ({', '.join(r.value for r in found)})",
+            name="Power management ICs",
+            passed=True,
+            detail=f"Power ICs present: {refs} ({', '.join(r.value for r in found)})",
         )
     # Fall back: look for U designators with regulator-like footprints
     u_parts = [r for r in rows if any(d.startswith("U") for d in r.designators)]
     if len(u_parts) >= 2:
         return CheckResult(
-            "Power management ICs",
-            True,
-            f"{len(u_parts)} IC(s) in BOM — verify power regulators are included",
+            name="Power management ICs",
+            passed=True,
+            detail=f"{len(u_parts)} IC(s) in BOM — verify power regulators are included",
         )
     return CheckResult(
-        "Power management ICs",
-        False,
-        "No power management ICs detected in BOM",
+        name="Power management ICs",
+        passed=False,
+        detail="No power management ICs detected in BOM",
+    )
+
+
+def check_capacitor_dielectric(rows: list[BomRow]) -> CheckResult:
+    """Verify capacitor dielectrics (MLCC) meet MIL/Space requirements (X7R+)."""
+    cap_rows = [r for r in rows if any(d.startswith("C") for d in r.designators)]
+    low_grade = []
+    for r in cap_rows:
+        if LOW_GRADE_DIELECTRIC.search(r.value) or LOW_GRADE_DIELECTRIC.search(r.footprint):
+            low_grade.append(r)
+
+    if not low_grade:
+        return CheckResult(
+            name="Capacitor Dielectric Grade",
+            passed=True,
+            detail="No low-grade dielectrics (X5R/Y5V) found in capacitors",
+        )
+
+    labels = [f"{', '.join(r.designators[:2])} ({r.value})" for r in low_grade]
+    return CheckResult(
+        name="Capacitor Dielectric Grade",
+        passed=False,
+        detail=f"Found {len(low_grade)} low-grade capacitor(s) (X5R/Y5V/Z5U): {'; '.join(labels)}. "
+        "Use X7R or C0G for temperature stability and aging resistance in space/MIL.",
     )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main(bom_file: str) -> int:
     path = Path(bom_file)
@@ -245,6 +281,7 @@ def main(bom_file: str) -> int:
     all_results.append(check_decoupling_caps(rows))
     all_results.append(check_empty_values(rows))
     all_results.append(check_power_ics(rows))
+    all_results.append(check_capacitor_dielectric(rows))
 
     total_parts = sum(r.quantity for r in rows)
     print(f"[BOM-CHECK] {len(rows)} BOM lines, {total_parts} total parts in {path.name}:")

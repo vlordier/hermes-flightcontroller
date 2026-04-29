@@ -23,14 +23,15 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from .config import settings
 
 # ── MIL-STD-275E / IPC-2221A thresholds ──────────────────────────────────────
-MIN_TRACK_WIDTH_MM     = 0.25   # MIL-STD-275E Table 1 external conductors
-MIN_VIA_DRILL_MM       = 0.30   # MIL-STD-275E PTH minimum
-MIN_GND_STITCH_VIAS    = 10     # EMI best practice per MIL-STD-461 guidance
+MIN_GND_STITCH_VIAS = 10  # EMI best practice per MIL-STD-461 guidance
 REQUIRED_SIGNAL_LAYERS = {"F.Cu", "B.Cu"}
-REQUIRED_INNER_LAYERS  = {"In1.Cu", "In2.Cu"}
-GND_NETNAME            = "GND"
+REQUIRED_INNER_LAYERS = {"In1.Cu", "In2.Cu"}
+GND_NETNAME = "GND"
 
 
 @dataclass
@@ -45,6 +46,7 @@ class CheckResult:
 
 
 # ── S-expression helpers ──────────────────────────────────────────────────────
+
 
 def _get_layers(text: str) -> dict[str, str]:
     """Return {layer_name: layer_type} for all copper layers."""
@@ -67,42 +69,52 @@ def _get_zones(text: str) -> list[dict[str, str]]:
     Recognised delimiters: footprint, via, segment, gr_, zone, setup, net.
     """
     # Top-level directives that can follow a zone block in .kicad_pcb files
-    _ZONE_DELIMITERS = r"footprint|via|segment|gr_|zone|setup|net\s"
+    zone_delimiters = r"footprint|via|segment|gr_|zone|setup|net\s"
     zones: list[dict[str, str]] = []
     for block in re.finditer(
-        rf"\(zone\b(.*?)\n\s*(?=\((?:{_ZONE_DELIMITERS}|\Z))",
+        rf"\(zone\b(.*?)\n\s*(?=\((?:{zone_delimiters}|\Z))",
         text,
         re.DOTALL,
     ):
         chunk = block.group(0)
         net = re.search(r'\(net_name "([^"]*)"\)', chunk)
         layer = re.search(r'\(layer "([^"]*)"\)', chunk)
-        zones.append({
-            "net_name": net.group(1) if net else "",
-            "layer":    layer.group(1) if layer else "",
-        })
+        zones.append(
+            {
+                "net_name": net.group(1) if net else "",
+                "layer": layer.group(1) if layer else "",
+            }
+        )
     return zones
 
 
-def _get_vias(text: str) -> list[float]:
-    """Return list of drill diameters (mm) for every via.
+def _get_vias(text: str) -> list[dict[str, float]]:
+    """Return list of {drill, size} for every via.
 
     KiCad 8 via format::
 
         (via
             (at ...)
-            (size ...)
-            (drill 0.4)
+            (size 0.6)
+            (drill 0.3)
             ...
         )
     """
-    return [
-        float(d)
-        for d in re.findall(r"\(via\n.*?\(drill ([\d.]+)\)", text, re.DOTALL)
-    ]
+    vias = []
+    # Match via blocks and extract size/drill
+    # Using a more robust regex that allows indentation
+    via_pattern = r"\(via\s+.*?\s*\(size ([\d.]+)\)\s*\(drill ([\d.]+)\)"
+    for block in re.finditer(via_pattern, text, re.DOTALL):
+        vias.append(
+            {
+                "size": float(block.group(1)),
+                "drill": float(block.group(2)),
+            }
+        )
+    return vias
 
 
-def _get_tracks(text: str) -> list[dict]:
+def _get_tracks(text: str) -> list[dict[str, Any]]:
     """Return list of {width, layer} for every track segment.
 
     KiCad 8 segment format::
@@ -130,6 +142,7 @@ def _has_edge_cuts(text: str) -> bool:
 
 # ── Individual checks ─────────────────────────────────────────────────────────
 
+
 def check_stackup(layers: dict[str, str]) -> CheckResult:
     """Verify 4-layer copper stackup is present."""
     required = REQUIRED_SIGNAL_LAYERS | REQUIRED_INNER_LAYERS
@@ -139,7 +152,7 @@ def check_stackup(layers: dict[str, str]) -> CheckResult:
         return CheckResult(
             "4-layer stackup",
             True,
-            f"F.Cu / In1.Cu / In2.Cu / B.Cu all present",
+            "F.Cu / In1.Cu / In2.Cu / B.Cu all present",
         )
     return CheckResult(
         "4-layer stackup",
@@ -151,8 +164,7 @@ def check_stackup(layers: dict[str, str]) -> CheckResult:
 def check_gnd_inner_zone(zones: list[dict[str, str]]) -> CheckResult:
     """Verify a GND zone covers at least one inner copper layer."""
     gnd_inner = [
-        z for z in zones
-        if z["net_name"] == GND_NETNAME and z["layer"] in REQUIRED_INNER_LAYERS
+        z for z in zones if z["net_name"] == GND_NETNAME and z["layer"] in REQUIRED_INNER_LAYERS
     ]
     if gnd_inner:
         layers_str = ", ".join({z["layer"] for z in gnd_inner})
@@ -170,57 +182,95 @@ def check_gnd_inner_zone(zones: list[dict[str, str]]) -> CheckResult:
     )
 
 
-def check_via_drills(drills: list[float]) -> list[CheckResult]:
-    """Check all via drills against MIL minimum."""
-    if not drills:
+def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
+    """Check all via drills and annular rings against MIL/IPC minimums."""
+    if not vias:
         return [CheckResult("Via drill sizes", False, "No vias found in PCB")]
-    violations = [d for d in drills if d < MIN_VIA_DRILL_MM]
-    if not violations:
-        return [CheckResult(
-            "Via drill sizes",
-            True,
-            f"{len(drills)} vias checked; min drill {min(drills):.3f} mm "
-            f">= {MIN_VIA_DRILL_MM} mm (MIL-STD-275E)",
-        )]
-    return [CheckResult(
-        "Via drill sizes",
-        False,
-        f"{len(violations)} via(s) with drill < {MIN_VIA_DRILL_MM} mm: "
-        f"min={min(violations):.3f} mm  [MIL-STD-275E: >= {MIN_VIA_DRILL_MM} mm]",
-    )]
+
+    results = []
+
+    # 1. Drill sizes
+    drill_violations = [v["drill"] for v in vias if v["drill"] < settings.min_via_drill_mm]
+    if not drill_violations:
+        results.append(
+            CheckResult(
+                "Via drill sizes",
+                True,
+                f"{len(vias)} vias checked; min drill {min(v['drill'] for v in vias):.3f} mm "
+                f">= {settings.min_via_drill_mm} mm (MIL-STD-275E)",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                "Via drill sizes",
+                False,
+                f"{len(drill_violations)} via(s) with drill < {settings.min_via_drill_mm} mm: "
+                f"min={min(drill_violations):.3f} mm  [MIL-STD-275E: >= {settings.min_via_drill_mm} mm]",
+            )
+        )
+
+    # 2. Annular rings
+    # Ring = (Size - Drill) / 2
+    annular_rings = [(v["size"] - v["drill"]) / 2 for v in vias]
+    ring_violations = [r for r in annular_rings if r < settings.min_annular_ring_mm]
+    if not ring_violations:
+        results.append(
+            CheckResult(
+                "Via annular rings",
+                True,
+                f"{len(vias)} via(s) checked; min annular ring {min(annular_rings):.3f} mm "
+                f">= {settings.min_annular_ring_mm} mm (IPC-2221A Class C)",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                "Via annular rings",
+                False,
+                f"{len(ring_violations)} via(s) with annular ring < {settings.min_annular_ring_mm} mm: "
+                f"min={min(ring_violations):.3f} mm [IPC-2221A Class C: >= {settings.min_annular_ring_mm} mm]",
+            )
+        )
+
+    return results
 
 
-def check_track_widths(tracks: list[dict]) -> list[CheckResult]:
+def check_track_widths(tracks: list[dict[str, Any]]) -> list[CheckResult]:
     """Check all signal-layer tracks against MIL minimum width."""
     if not tracks:
         return [CheckResult("Track widths", False, "No track segments found in PCB")]
     # Only flag external/signal layers (MIL-STD-275E applies to external conductors)
     signal_tracks = [t for t in tracks if t["layer"] in REQUIRED_SIGNAL_LAYERS]
-    violations = [t for t in signal_tracks if t["width"] < MIN_TRACK_WIDTH_MM]
+    violations = [t for t in signal_tracks if t["width"] < settings.min_track_width_mm]
     if not violations:
         widths = [t["width"] for t in signal_tracks]
-        return [CheckResult(
-            "Track widths (signal layers)",
-            True,
-            f"{len(signal_tracks)} tracks; min {min(widths) if widths else 0:.4f} mm "
-            f">= {MIN_TRACK_WIDTH_MM} mm (MIL-STD-275E)",
-        )]
+        return [
+            CheckResult(
+                "Track widths (signal layers)",
+                True,
+                f"{len(signal_tracks)} tracks; min {min(widths) if widths else 0:.4f} mm "
+                f">= {settings.min_track_width_mm} mm (MIL-STD-275E)",
+            )
+        ]
     by_width: dict[float, int] = {}
     for t in violations:
         by_width[t["width"]] = by_width.get(t["width"], 0) + 1
     detail = ", ".join(f"{w:.4f}mm ×{c}" for w, c in sorted(by_width.items()))
-    return [CheckResult(
-        "Track widths (signal layers)",
-        False,
-        f"{len(violations)} track(s) on signal layers below {MIN_TRACK_WIDTH_MM} mm: "
-        f"{detail}  [MIL-STD-275E: >= {MIN_TRACK_WIDTH_MM} mm]",
-    )]
+    return [
+        CheckResult(
+            "Track widths (signal layers)",
+            False,
+            f"{len(violations)} track(s) on signal layers below {settings.min_track_width_mm} mm: "
+            f"{detail}  [MIL-STD-275E: >= {settings.min_track_width_mm} mm]",
+        )
+    ]
 
 
-def check_gnd_stitching(drills: list[float], zones: list[dict]) -> CheckResult:
+def check_gnd_stitching(vias: list[dict[str, float]], zones: list[dict[str, str]]) -> CheckResult:
     """Report GND stitching via count."""
     # Count total vias as a proxy for stitching (zone vias are GND-connected)
-    total_vias = len(drills)
+    total_vias = len(vias)
     ok = total_vias >= MIN_GND_STITCH_VIAS
     return CheckResult(
         "GND stitching vias",
@@ -242,6 +292,7 @@ def check_edge_cuts(text: str) -> CheckResult:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main(pcb_file: str) -> int:
     path = Path(pcb_file)
     if not path.exists():
@@ -254,16 +305,16 @@ def main(pcb_file: str) -> int:
         return 1
 
     layers = _get_layers(text)
-    zones  = _get_zones(text)
-    drills = _get_vias(text)
+    zones = _get_zones(text)
+    vias = _get_vias(text)
     tracks = _get_tracks(text)
 
     all_results: list[CheckResult] = []
     all_results.append(check_stackup(layers))
     all_results.append(check_gnd_inner_zone(zones))
-    all_results += check_via_drills(drills)
+    all_results += check_vias(vias)
     all_results += check_track_widths(tracks)
-    all_results.append(check_gnd_stitching(drills, zones))
+    all_results.append(check_gnd_stitching(vias, zones))
     all_results.append(check_edge_cuts(text))
 
     print(f"[PCB-CHECK] Results for {path.name}:")
