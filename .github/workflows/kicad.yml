@@ -1,0 +1,60 @@
+name: KiCad ERC & DRC
+
+on:
+  push:
+    paths:
+      - "PCB/HermesFC/*.kicad_sch"
+      - "PCB/HermesFC/*.kicad_pcb"
+      - "PCB/HermesFC/*.kicad_pro"
+    branches: ["**"]
+  pull_request:
+    paths:
+      - "PCB/HermesFC/*.kicad_sch"
+      - "PCB/HermesFC/*.kicad_pcb"
+      - "PCB/HermesFC/*.kicad_pro"
+    branches: ["**"]
+
+jobs:
+  erc:
+    name: Electrical Rules Check (ERC)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/inti-cmnb/kicad_auto:ki8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ERC
+        run: |
+          kicad-cli sch erc \
+            --output erc-report.txt \
+            PCB/HermesFC/HermesFC.kicad_sch
+
+      - name: Upload ERC report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: erc-report
+          path: erc-report.txt
+
+  drc:
+    name: Design Rules Check (DRC)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/inti-cmnb/kicad_auto:ki8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run DRC
+        run: |
+          kicad-cli pcb drc \
+            --output drc-report.txt \
+            PCB/HermesFC/HermesFC.kicad_pcb
+
+      - name: Upload DRC report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drc-report
+          path: drc-report.txt
