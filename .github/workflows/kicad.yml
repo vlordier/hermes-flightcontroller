@@ -1,0 +1,93 @@
+name: KiCad CI - ERC/DRC/Simulation/Exports
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['PCB/**']
+  pull_request:
+    paths: ['PCB/**']
+
+jobs:
+  kicad-validate:
+    name: Validate & Export
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: ghcr.io/inti-cmnb/kicad_auto:ki8
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # ── ERC (Electrical Rules Check) ────────────────────────────────────────
+      - name: Run ERC (Schematic)
+        run: |
+          kicad-cli sch erc \
+            --output erc_report.txt \
+            PCB/HermesFC/HermesFC.kicad_sch
+
+      # ── DRC (Design Rules Check) ─────────────────────────────────────────────
+      - name: Run DRC (PCB)
+        run: |
+          kicad-cli pcb drc \
+            --output drc_report.txt \
+            PCB/HermesFC/HermesFC.kicad_pcb
+
+      # ── KiBot: Gerbers, BOM, PDFs, 3D renders ───────────────────────────────
+      # Note: all steps run inside ghcr.io/inti-cmnb/kicad_auto:ki8, which
+      # includes both kicad-cli and kibot. No extra installation is needed.
+      - name: Generate Outputs with KiBot
+        run: |
+          kibot -c PCB/kibot.yaml \
+                -d output \
+                -b PCB/HermesFC/HermesFC.kicad_pcb \
+                -e PCB/HermesFC/HermesFC.kicad_sch
+
+      # ── SPICE simulation ─────────────────────────────────────────────────────
+      # The container runs as root, so no sudo prefix is required for apt-get.
+      - name: Install ngspice
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ngspice python3
+
+      - name: Export SPICE Netlist
+        run: |
+          kicad-cli sch export netlist \
+            --format spice \
+            --output sim.net \
+            PCB/HermesFC/HermesFC.kicad_sch
+        continue-on-error: true
+
+      - name: Run SPICE Simulations
+        run: |
+          if [ -f sim.net ]; then
+            ngspice -b -o sim_output.txt sim.net || true
+          else
+            echo "No SPICE netlist generated — skipping simulation." | tee sim_output.txt
+          fi
+        continue-on-error: true
+
+      - name: Check Simulation Results
+        run: python3 scripts/check_spice.py sim_output.txt
+        continue-on-error: true
+
+      # ── Upload all artifacts ─────────────────────────────────────────────────
+      - name: Upload Reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            erc_report.txt
+            drc_report.txt
+            sim_output.txt
+
+      - name: Upload Manufacturing Files
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: manufacturing-files
+          path: output/

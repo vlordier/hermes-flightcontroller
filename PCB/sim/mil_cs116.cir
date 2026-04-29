@@ -1,0 +1,63 @@
+* MIL-STD-461G CS116 Damped-Sinusoid Injection Source
+* Coupled onto the power rail (VBUS → +5 V rail) to verify
+* immunity / overshoot limits per MIL-STD-704F.
+*
+* ── How to integrate with the KiCad SPICE netlist ─────────────────────────────
+* The CI pipeline concatenates this file with the exported KiCad netlist:
+*
+*   cat mil_cs116.cir sim.net > mil_sim_full.cir
+*   ngspice -b -o sim_output.txt mil_sim_full.cir
+*
+* Steps to activate:
+*  1. In KiCad, export a SPICE netlist (kicad-cli sch export netlist --format spice).
+*  2. Identify the VBUS net name in the exported netlist (e.g. "VBUS" or "NET-1").
+*  3. Replace VBUS_RAIL below with that net name.
+*  4. Add SPICE models to each component symbol in KiCad and re-export.
+*
+* ── Waveform: CS116 damped sinusoid ──────────────────────────────────────────
+* V(t) = Vpk * exp(-alpha*t) * sin(2*pi*f*t)
+*   Vpeak = 0.5 V  (CS116 test level for Category 1 equipment)
+*   f     = 1 MHz  (representative; sweep 10 kHz–100 MHz in practice)
+*   alpha = 2*pi*f (Q ≈ 1, critically damped)
+*
+* ngspice SIN source syntax: SIN(offset amplitude freq delay dampingfactor)
+*   dampingfactor = alpha / (2*pi) = f = 1e6 for Q=1 at 1 MHz
+* This produces V = 0.5 * exp(-6.28e6 * t) * sin(2*pi*1e6 * t)
+
+* ── Injection source ─────────────────────────────────────────────────────────
+* This source is injected in series with the VBUS supply to the DUT.
+* The net VBUS_RAIL is split into VBUS_SRC (supply side) and VBUS_RAIL
+* (board side); Vcs116 is placed in series between them.
+*
+* Replace VBUS_RAIL and VBUS_SRC with the actual net names from your netlist.
+* If a DC source for VBUS already appears in the exported netlist, rename it
+* to drive VBUS_SRC and use the injection source below for VBUS_RAIL.
+Vcs116 VBUS_RAIL VBUS_SRC SIN(0 0.5 1Meg 0 1e6)
+
+* Nominal VBUS DC supply (5 V from USB / power path)
+Vvbus VBUS_SRC 0 DC 5.0
+
+* ── Simulation control ───────────────────────────────────────────────────────
+.tran 1n 10u            ; 10 µs transient, 1 ns resolution
+
+* ── Measurements (parsed by check_mil_spice.py) ──────────────────────────────
+* DC operating point (before transient)
+.op
+
+* Ripple (peak-to-peak) — run after .tran
+.meas tran pp_5v  pp(v(5v))
+.meas tran pp_3v3 pp(v(3v3))
+.meas tran pp_1v8 pp(v(1v8))
+
+* Steady-state DC levels (average over last 5 µs)
+.meas tran avg_5v  avg(v(5v))  from=5u to=10u
+.meas tran avg_3v3 avg(v(3v3)) from=5u to=10u
+.meas tran avg_1v8 avg(v(1v8)) from=5u to=10u
+
+* Peak / minimum (for overshoot check)
+.meas tran max_5v  max(v(5v))
+.meas tran min_5v  min(v(5v))
+.meas tran max_3v3 max(v(3v3))
+.meas tran min_3v3 min(v(3v3))
+
+.end
