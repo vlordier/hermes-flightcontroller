@@ -72,6 +72,9 @@
 # ── Crystal / oscillator keep-out ─────────────────────────────────────────────
 # ICM-20948 SPI clock routing: keep switching signals ≥ 0.5 mm from oscillator
 # areas to reduce frequency reference contamination (MIL-STD-461 RS103 margin).
+# IMPORTANT: This rule requires a "HighSpeed" net class to be defined in the
+# KiCad project (PCB Editor → Board Setup → Net Classes).  If that net class
+# does not exist the rule is silently ignored by KiCad during DRC.
 (rule mil_crystal_keepout
   (constraint clearance (min 0.5mm))
   (condition "A.NetClass == 'HighSpeed' && B.Reference =~ 'Y[0-9]+'")

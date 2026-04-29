@@ -30,20 +30,32 @@ from pathlib import Path
 
 # ── MIL-STD-461G RE102 limits (dBµV/m at 1 m, narrowband) ───────────────────
 # Piecewise-linear limit curve for Army/Navy/Air Force ground equipment.
+# RE102 covers 30 MHz–18 GHz; the entries below 30 MHz (10 kHz–2 MHz)
+# are from the RE101/RE102 transition region used for smooth extrapolation
+# — actual RE101 (magnetic field) limits apply below 100 kHz.
 # Frequency (Hz) → limit (dBµV/m)
 RE102_LIMITS: list[tuple[float, float]] = [
-    (1.0e4,   24.0),   #  10 kHz  — start of RE102 curve
+    (1.0e4,   24.0),   #  10 kHz  — RE101/RE102 transition (extrapolation anchor)
     (1.5e5,   24.0),   # 150 kHz
     (2.0e6,   34.0),   #   2 MHz
-    (3.0e7,   34.0),   #  30 MHz  — end of lower plateau
+    (3.0e7,   34.0),   #  30 MHz  — RE102 lower bound (Army/Navy ground)
     (1.0e8,   44.0),   # 100 MHz
     (2.0e9,   54.0),   #   2 GHz
-    (1.8e10,  54.0),   #  18 GHz
+    (1.8e10,  54.0),   #  18 GHz  — RE102 upper bound
 ]
 
 # ── RS103 susceptibility threshold (dBµV/m, electric field immunity) ─────────
 # Minimum immunity target; field below this level must not cause upset.
 RS103_IMMUNITY_THRESHOLD_DB = 50.0  # dBµV/m at 1 m (simplified)
+
+
+def _log_interpolate(x: float, x0: float, x1: float, y0: float, y1: float) -> float:
+    """Interpolate y at x using a logarithmic x-axis (frequency is log-scaled).
+
+    Equivalent to linear interpolation after mapping x → log10(x).
+    """
+    t = math.log10(x / x0) / math.log10(x1 / x0)
+    return y0 + t * (y1 - y0)
 
 
 def _interpolate_re102_limit(freq_hz: float) -> float:
@@ -56,9 +68,7 @@ def _interpolate_re102_limit(freq_hz: float) -> float:
         f0, l0 = RE102_LIMITS[i]
         f1, l1 = RE102_LIMITS[i + 1]
         if f0 <= freq_hz <= f1:
-            # Log-linear interpolation (frequency axis is logarithmic)
-            t = math.log10(freq_hz / f0) / math.log10(f1 / f0)
-            return l0 + t * (l1 - l0)
+            return _log_interpolate(freq_hz, f0, f1, l0, l1)
     return RE102_LIMITS[-1][1]
 
 
@@ -106,7 +116,7 @@ def _run_fdtd_simulation(model_dir: Path) -> Path | None:
         cmd,
         capture_output=True,
         text=True,
-        timeout=1800,  # 30-minute hard limit for CI
+        timeout=600,  # 10-minute limit; adjust via CI_EM_TIMEOUT env var if needed
     )
     if proc.returncode != 0:
         print("[EM] FDTD simulation exited with errors:")

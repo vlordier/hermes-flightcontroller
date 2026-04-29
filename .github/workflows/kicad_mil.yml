@@ -232,8 +232,7 @@ jobs:
       - name: Install Python deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3 python3-pip
-          pip3 install --quiet jinja2
+          sudo apt-get install -y --no-install-recommends python3
 
       - name: Generate MIL Compliance Report
         run: python3 scripts/mil_checklist.py --report mil_compliance.md

@@ -129,7 +129,9 @@ def _check_dc(measurements: dict[str, float]) -> list[CheckResult]:
 def _net_name(pattern: str) -> str:
     """Extract the net name from a v(...) SPICE pattern string.
 
-    Example: r"v\\(5v\\)" → "5v"
+    Patterns are stored with regex escapes (e.g. ``r"v\\(5v\\)"`` to match
+    the literal SPICE notation ``v(5v)``).  This helper strips the wrapper
+    to recover the bare net name (e.g. ``"5v"``).
     """
     m = re.match(r"v\\\((.+?)\\\)", pattern)
     if m:
@@ -181,27 +183,35 @@ def _check_transients(
         if max_key in transients:
             val = transients[max_key]
             over = val - nominal
-            ok = over <= MIL704_TRANSIENT_OVER_V
+            # Check absolute MIL-STD-704F limit
+            ok_abs = over <= MIL704_TRANSIENT_OVER_V
+            # Check fractional MIL-STD-461G CS116 limit (50 % above nominal)
+            ok_cs116 = (over / nominal) <= CS116_OVERSHOOT_LIMIT if nominal else True
+            ok = ok_abs and ok_cs116
+            limit_str = (
+                f"+{MIL704_TRANSIENT_OVER_V*1000:.0f} mV (704F) / "
+                f"+{CS116_OVERSHOOT_LIMIT*100:.0f}% (CS116)"
+            )
             results.append(CheckResult(
                 name=f"{spec.label} transient overshoot",
                 passed=ok,
-                detail=(
-                    f"+{over*1000:.1f} mV peak  "
-                    f"[MIL-STD-704F limit: +{MIL704_TRANSIENT_OVER_V*1000:.0f} mV]"
-                ),
+                detail=f"+{over*1000:.1f} mV peak  [limit: {limit_str}]",
             ))
 
         if min_key in transients:
             val = transients[min_key]
             under = nominal - val
-            ok = under <= MIL704_TRANSIENT_UNDER_V
+            ok_abs = under <= MIL704_TRANSIENT_UNDER_V
+            ok_cs116 = (under / nominal) <= CS116_UNDERSHOOT_LIMIT if nominal else True
+            ok = ok_abs and ok_cs116
+            limit_str = (
+                f"-{MIL704_TRANSIENT_UNDER_V*1000:.0f} mV (704F) / "
+                f"-{CS116_UNDERSHOOT_LIMIT*100:.0f}% (CS116)"
+            )
             results.append(CheckResult(
                 name=f"{spec.label} transient undershoot",
                 passed=ok,
-                detail=(
-                    f"-{under*1000:.1f} mV peak  "
-                    f"[MIL-STD-704F limit: -{MIL704_TRANSIENT_UNDER_V*1000:.0f} mV]"
-                ),
+                detail=f"-{under*1000:.1f} mV peak  [limit: {limit_str}]",
             ))
 
     return results
