@@ -18,7 +18,8 @@ documentation, and firmware (when it arrives) are all welcome.
 - Keep the design rule settings consistent with those in `HermesFC.kicad_pro`.
 - Run **ERC** (Electrical Rules Check) and **DRC** (Design Rule Check) before
   submitting. Fix all errors; annotate any intentional warnings in the PR
-  description.
+  description. CI will run both automatically via `kicad-cli` in the
+  `kicad.yml` workflow.
 - Use **LCSC** part numbers in the `LCSC Part #` symbol field so the BOM stays
   JLCPCB-compatible.
 - Export manufacturing files to `PCB/HermesFC/manufacturing/` using the
@@ -27,6 +28,18 @@ documentation, and firmware (when it arrives) are all welcome.
   - BOM as `bom.csv`
   - Pick-and-place as `positions.csv`
   - IPC-D-356 netlist as `netlist.ipc`
+- KiBot will automatically regenerate Gerbers, BOM, PDFs, and 3D renders
+  when the CI pipeline runs (see `PCB/kibot.yaml`).
+
+## SPICE Simulation
+
+The CI pipeline exports a SPICE netlist and validates power-rail voltages via
+`scripts/check_spice.py`. To enable real simulation:
+
+1. Add SPICE models to each component's symbol properties in KiCad.
+2. Add simulation directives (`.op`, `.tran`, `.ac`) to the schematic.
+3. Update the thresholds in `scripts/check_spice.py` if the power topology
+   changes.
 
 ## Documentation Guidelines
 
