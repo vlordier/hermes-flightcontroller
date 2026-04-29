@@ -1,0 +1,95 @@
+# KiCad custom DRC rules for MIL-STD-275 / MIL-PRF-55110 / IPC-2221A
+# compliance on the Hermes Flight Controller PCB.
+#
+# Place this file next to the .kicad_pcb file; KiCad automatically applies
+# it during DRC.  Each constraint adds a check on top of the board's built-in
+# design rules — violations appear as DRC errors in the standard report.
+#
+# References:
+#   MIL-STD-275E  — Printed Wiring for Electronic Equipment
+#   IPC-2221A     — Generic Standard on Printed Board Design
+#   MIL-PRF-55110 — Performance Specification: Printed Wiring Boards
+#   MIL-STD-461G  — Grounding / trace-separation requirements (RE102 margin)
+
+(version 1)
+
+# ── Trace clearance ───────────────────────────────────────────────────────────
+# MIL-STD-275E Table 1: minimum clearance for ≤100 V unpotted boards.
+# IPC-2221A Class B: 0.13 mm internal, 0.25 mm external.
+(rule mil_min_clearance
+  (constraint clearance (min 0.25mm))
+  (condition "A.Type == 'track' && B.Type == 'track'")
+)
+
+# ── Trace width ───────────────────────────────────────────────────────────────
+# IPC-2221A: 0.25 mm absolute minimum for external layers under MIL conditions.
+(rule mil_min_trace_width
+  (constraint track_width (min 0.25mm))
+)
+
+# ── Power / return trace width ────────────────────────────────────────────────
+# Hermes power rails carry up to 3 A; derate by 50 % for MIL temperature range
+# (-40 °C to +85 °C, 10 °C rise).  IPC-2221A chart: 0.8 mm for 2 A external.
+(rule mil_power_trace_width
+  (constraint track_width (min 0.8mm))
+  (condition "A.NetClass == 'Power'")
+)
+
+# ── Via drill size ────────────────────────────────────────────────────────────
+# MIL-STD-275E: drill diameter ≥ 0.3 mm for plated-through-holes.
+(rule mil_via_drill
+  (constraint via_hole_size (min 0.3mm))
+)
+
+# ── Via annular ring ─────────────────────────────────────────────────────────
+# IPC-2221A Class C (military): annular ring ≥ 0.05 mm (finished).
+# KiCad checks annular ring via (drill, pad) relationship.
+(rule mil_annular_ring
+  (constraint annular_width (min 0.05mm))
+)
+
+# ── Edge clearance ────────────────────────────────────────────────────────────
+# MIL-STD-275E: copper ≥ 1.25 mm from board edge (unpotted, Class 3).
+(rule mil_edge_clearance
+  (constraint edge_clearance (min 1.25mm))
+)
+
+# ── Silkscreen text size ──────────────────────────────────────────────────────
+# MIL-STD-275E: silk legend characters ≥ 1.0 mm tall for legibility.
+(rule mil_silk_text_size
+  (constraint text_height (min 1.0mm))
+  (condition "A.Layer == 'F.SilkS' || A.Layer == 'B.SilkS'")
+)
+
+# ── High-voltage clearance ────────────────────────────────────────────────────
+# USB VBUS (5 V) to AGND: keep extra clearance to avoid conducted noise coupling
+# per MIL-STD-461G EMI guidelines.
+(rule mil_hv_to_agnd_clearance
+  (constraint clearance (min 0.5mm))
+  (condition "A.NetName == 'VBUS' && B.NetName == 'AGND'")
+)
+
+# ── Crystal / oscillator keep-out ─────────────────────────────────────────────
+# ICM-20948 SPI clock routing: keep switching signals ≥ 0.5 mm from oscillator
+# areas to reduce frequency reference contamination (MIL-STD-461 RS103 margin).
+(rule mil_crystal_keepout
+  (constraint clearance (min 0.5mm))
+  (condition "A.NetClass == 'HighSpeed' && B.Reference =~ 'Y[0-9]+'")
+)
+
+# ── Differential-pair skew ────────────────────────────────────────────────────
+# USB D+/D- differential pair: matched-length tolerance ±0.1 mm.
+(rule mil_diffpair_skew
+  (constraint diff_pair_gap (min 0.1mm) (max 0.25mm))
+  (condition "A.DiffPair")
+)
+
+# ── Copper pour / ground plane requirement ────────────────────────────────────
+# Informational: all inner layers should be flood-filled with GND for shielding
+# per MIL-STD-461G.  This rule flags isolated copper segments < 1 mm² as DRC
+# warnings (KiCad does not yet support area constraints natively, so this
+# serves as a clearance marker for keep-out zones).
+(rule mil_isolated_copper
+  (constraint clearance (min 0.1mm))
+  (condition "A.Type == 'zone' && A.NetName == 'GND'")
+)

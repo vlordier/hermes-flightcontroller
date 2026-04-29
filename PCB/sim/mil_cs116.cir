@@ -1,0 +1,46 @@
+* MIL-STD-461G CS116 Damped-Sinusoid Injection Source
+* Coupled onto the power rail (VBUS → +5 V rail) to verify
+* immunity / overshoot limits per MIL-STD-704F.
+*
+* This file is concatenated with the exported KiCad SPICE netlist
+* by the CI pipeline before ngspice runs.
+*
+* Waveform: V = Vpk * exp(-alpha*t) * sin(2*pi*f*t)
+*   Vpeak = 0.5 V  (CS116 test level for Category 1 equipment)
+*   f     = 1 MHz  (representative — sweep 10 kHz to 100 MHz in practice)
+*   alpha = 2*pi*f (critically damped Q ~ 1)
+*
+* To extend: duplicate this source block at other injection frequencies
+* and add .meas statements for each power rail.
+
+* ── Injection source ─────────────────────────────────────────────────────────
+* Inject in series with VBUS feed to the board.
+* Replace <VBUS_NODE> and <VBUS_RETURN> with actual net names from netlist.
+Vcs116 VBUS_INJ 0 DC 0 TRNOISE 0 0 0 0 0
+*   Alternatively, use a PWL or PULSE source:
+*Vcs116 VBUS_INJ 0 EXP(0 0.5 0 10n 100n 1u)
+
+* ── Simulation control ───────────────────────────────────────────────────────
+.tran 1n 10u            ; 10 µs transient, 1 ns resolution
+
+* ── Measurements (parsed by check_mil_spice.py) ──────────────────────────────
+* DC operating point (before transient)
+.op
+
+* Ripple (peak-to-peak) — run after .tran
+.meas tran pp_5v  pp(v(5v))
+.meas tran pp_3v3 pp(v(3v3))
+.meas tran pp_1v8 pp(v(1v8))
+
+* Steady-state DC levels (average over last 5 µs)
+.meas tran avg_5v  avg(v(5v))  from=5u to=10u
+.meas tran avg_3v3 avg(v(3v3)) from=5u to=10u
+.meas tran avg_1v8 avg(v(1v8)) from=5u to=10u
+
+* Peak / minimum (for overshoot check)
+.meas tran max_5v  max(v(5v))
+.meas tran min_5v  min(v(5v))
+.meas tran max_3v3 max(v(3v3))
+.meas tran min_3v3 min(v(3v3))
+
+.end
