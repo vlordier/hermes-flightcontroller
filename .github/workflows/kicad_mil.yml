@@ -189,7 +189,7 @@ jobs:
             gerber2ems \
               -i PCB/HermesFC/manufacturing/ \
               -o em_sim/ \
-              --layers F.Cu,B.Cu,In1.Cu,In2.Cu
+              --layers F.Cu B.Cu In1.Cu In2.Cu
           else
             echo "gerber2ems not available — skipping Gerber-to-openEMS conversion."
           fi
@@ -223,6 +223,7 @@ jobs:
         # Checks: 4-layer stackup, GND zone on inner layers, via drills >= 0.3 mm,
         # track widths on signal layers >= 0.25 mm, GND stitching via count.
         run: |
+          pip install sexpdata pydantic pydantic-settings
           python3 scripts/check_pcb.py "$PCB"
         continue-on-error: true
 
@@ -231,6 +232,7 @@ jobs:
         # Checks: LCSC part numbers for all parts, TVS/ESD protection present,
         # sufficient decoupling capacitors, no empty value fields.
         run: |
+          pip install pydantic pydantic-settings
           python3 scripts/check_bom.py PCB/HermesFC/manufacturing/bom.csv
 
       - name: Upload PCB/BOM check results

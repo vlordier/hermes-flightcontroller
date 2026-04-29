@@ -72,6 +72,10 @@ check_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
+module = "sexpdata.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "matplotlib.*"
 ignore_missing_imports = true
 
