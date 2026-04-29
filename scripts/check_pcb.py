@@ -8,6 +8,8 @@ Checks performed directly on the .kicad_pcb S-expression file:
   * Track widths >= 0.25 mm on signal layers (MIL-STD-275E Table 1)
   * GND stitching via count (>= 10 recommended for EMI per MIL-STD-461)
   * Board outline (Edge.Cuts) present
+  * Net name conventions (uppercase, no spaces)
+  * Footprint reference designator silkscreen presence
 
 Exit codes:
   0 — all checks passed
@@ -20,11 +22,11 @@ Usage:
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import sexpdata
+from pydantic import BaseModel
 
 try:
     from .config import settings
@@ -38,8 +40,7 @@ REQUIRED_INNER_LAYERS = {"In1.Cu", "In2.Cu"}
 GND_NETNAME = "GND"
 
 
-@dataclass
-class CheckResult:
+class CheckResult(BaseModel):
     name: str
     passed: bool
     detail: str
@@ -132,12 +133,49 @@ class PcbParser:
         """Return True if an Edge.Cuts segment/drawing exists."""
         for item in self.data:
             # gr_line, gr_arc, gr_circle etc.
-            if isinstance(item, list) and str(item[0]).startswith("gr_"):
-                for prop in item:
-                    if isinstance(prop, list) and sexpdata.Symbol("layer") == prop[0]:
-                        if prop[1] == "Edge.Cuts":
-                            return True
+            if not (isinstance(item, list) and str(item[0]).startswith("gr_")):
+                continue
+            for prop in item:
+                if (
+                    isinstance(prop, list)
+                    and sexpdata.Symbol("layer") == prop[0]
+                    and prop[1] == "Edge.Cuts"
+                ):
+                    return True
         return False
+
+    def get_nets(self) -> list[str]:
+        """Return list of all net names (excluding the empty net 0)."""
+        nets = []
+        for item in self.data:
+            if isinstance(item, list) and sexpdata.Symbol("net") == item[0] and len(item) >= 3:
+                name = str(item[2])
+                if name:  # skip the unnamed net 0
+                    nets.append(name)
+        return nets
+
+    def get_footprint_refs(self) -> list[tuple[str, bool]]:
+        """Return list of (footprint_value, has_reference) for every footprint."""
+        footprints = []
+        for item in self.data:
+            if not (isinstance(item, list) and sexpdata.Symbol("footprint") == item[0]):
+                continue
+            fp_value = str(item[1]) if len(item) > 1 else "Unknown"
+            has_ref = False
+            for prop in item:
+                if not isinstance(prop, list):
+                    continue
+                sym = prop[0]
+                if (
+                    sexpdata.Symbol("fp_text") == sym
+                    and len(prop) > 1
+                    and prop[1] == sexpdata.Symbol("reference")
+                ) or (
+                    sexpdata.Symbol("property") == sym and len(prop) > 1 and prop[1] == "Reference"
+                ):
+                    has_ref = True
+            footprints.append((fp_value, has_ref))
+        return footprints
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
@@ -150,14 +188,14 @@ def check_stackup(layers: dict[str, str]) -> CheckResult:
     missing = required - copper
     if not missing:
         return CheckResult(
-            "4-layer stackup",
-            True,
-            "F.Cu / In1.Cu / In2.Cu / B.Cu all present",
+            name="4-layer stackup",
+            passed=True,
+            detail="F.Cu / In1.Cu / In2.Cu / B.Cu all present",
         )
     return CheckResult(
-        "4-layer stackup",
-        False,
-        f"Missing copper layers: {', '.join(sorted(missing))}",
+        name="4-layer stackup",
+        passed=False,
+        detail=f"Missing copper layers: {', '.join(sorted(missing))}",
     )
 
 
@@ -169,15 +207,15 @@ def check_gnd_inner_zone(zones: list[dict[str, str]]) -> CheckResult:
     if gnd_inner:
         layers_str = ", ".join({z["layer"] for z in gnd_inner})
         return CheckResult(
-            "GND zone on inner layer",
-            True,
-            f"GND zone found on: {layers_str}",
+            name="GND zone on inner layer",
+            passed=True,
+            detail=f"GND zone found on: {layers_str}",
         )
     # Also pass if In1.Cu is listed as a power-type layer (dedicated plane)
     return CheckResult(
-        "GND zone on inner layer",
-        False,
-        "No GND zone found on In1.Cu or In2.Cu — add a GND copper pour on In1.Cu "
+        name="GND zone on inner layer",
+        passed=False,
+        detail="No GND zone found on In1.Cu or In2.Cu — add a GND copper pour on In1.Cu "
         "for EMI shielding per MIL-STD-461 guidance",
     )
 
@@ -185,7 +223,7 @@ def check_gnd_inner_zone(zones: list[dict[str, str]]) -> CheckResult:
 def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
     """Check all via drills and annular rings against MIL/IPC minimums."""
     if not vias:
-        return [CheckResult("Via drill sizes", False, "No vias found in PCB")]
+        return [CheckResult(name="Via drill sizes", passed=False, detail="No vias found in PCB")]
 
     results = []
 
@@ -194,18 +232,18 @@ def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
     if not drill_violations:
         results.append(
             CheckResult(
-                "Via drill sizes",
-                True,
-                f"{len(vias)} vias checked; min drill {min(v['drill'] for v in vias):.3f} mm "
+                name="Via drill sizes",
+                passed=True,
+                detail=f"{len(vias)} vias checked; min drill {min(v['drill'] for v in vias):.3f} mm "
                 f">= {settings.min_via_drill_mm} mm (MIL-STD-275E)",
             )
         )
     else:
         results.append(
             CheckResult(
-                "Via drill sizes",
-                False,
-                f"{len(drill_violations)} via(s) with drill < {settings.min_via_drill_mm} mm: "
+                name="Via drill sizes",
+                passed=False,
+                detail=f"{len(drill_violations)} via(s) with drill < {settings.min_via_drill_mm} mm: "
                 f"min={min(drill_violations):.3f} mm  [MIL-STD-275E: >= {settings.min_via_drill_mm} mm]",
             )
         )
@@ -217,18 +255,18 @@ def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
     if not ring_violations:
         results.append(
             CheckResult(
-                "Via annular rings",
-                True,
-                f"{len(vias)} via(s) checked; min annular ring {min(annular_rings):.3f} mm "
+                name="Via annular rings",
+                passed=True,
+                detail=f"{len(vias)} via(s) checked; min annular ring {min(annular_rings):.3f} mm "
                 f">= {settings.min_annular_ring_mm} mm (IPC-2221A Class C)",
             )
         )
     else:
         results.append(
             CheckResult(
-                "Via annular rings",
-                False,
-                f"{len(ring_violations)} via(s) with annular ring < {settings.min_annular_ring_mm} mm: "
+                name="Via annular rings",
+                passed=False,
+                detail=f"{len(ring_violations)} via(s) with annular ring < {settings.min_annular_ring_mm} mm: "
                 f"min={min(ring_violations):.3f} mm [IPC-2221A Class C: >= {settings.min_annular_ring_mm} mm]",
             )
         )
@@ -239,7 +277,9 @@ def check_vias(vias: list[dict[str, float]]) -> list[CheckResult]:
 def check_track_widths(tracks: list[dict[str, Any]], net_map: dict[int, str]) -> list[CheckResult]:
     """Check tracks against MIL minimum width, differentiating signal vs power."""
     if not tracks:
-        return [CheckResult("Track widths", False, "No track segments found in PCB")]
+        return [
+            CheckResult(name="Track widths", passed=False, detail="No track segments found in PCB")
+        ]
 
     # Only flag external/signal layers
     external_tracks = [t for t in tracks if t["layer"] in REQUIRED_SIGNAL_LAYERS]
@@ -264,29 +304,33 @@ def check_track_widths(tracks: list[dict[str, Any]], net_map: dict[int, str]) ->
     if not signal_violations:
         results.append(
             CheckResult(
-                "Signal track widths",
-                True,
-                f"All signal tracks >= {settings.min_track_width_mm} mm (MIL-STD-275E)",
+                name="Signal track widths",
+                passed=True,
+                detail=f"All signal tracks >= {settings.min_track_width_mm} mm (MIL-STD-275E)",
             )
         )
     else:
         results.append(
             CheckResult(
-                "Signal track widths",
-                False,
-                f"{len(signal_violations)} violation(s); min {min(t['width'] for t in signal_violations):.3f} mm",
+                name="Signal track widths",
+                passed=False,
+                detail=f"{len(signal_violations)} violation(s); min {min(t['width'] for t in signal_violations):.3f} mm",
             )
         )
 
     # Report Power
     if not power_violations:
-        results.append(CheckResult("Power track widths", True, "Power tracks meet width targets"))
+        results.append(
+            CheckResult(
+                name="Power track widths", passed=True, detail="Power tracks meet width targets"
+            )
+        )
     else:
         results.append(
             CheckResult(
-                "Power track widths",
-                False,
-                f"{len(power_violations)} power track(s) below recommended 0.5mm for current",
+                name="Power track widths",
+                passed=False,
+                detail=f"{len(power_violations)} power track(s) below recommended 0.5mm for current",
             )
         )
 
@@ -299,9 +343,9 @@ def check_gnd_stitching(vias: list[dict[str, float]], zones: list[dict[str, str]
     total_vias = len(vias)
     ok = total_vias >= MIN_GND_STITCH_VIAS
     return CheckResult(
-        "GND stitching vias",
-        ok,
-        f"{total_vias} total vias  "
+        name="GND stitching vias",
+        passed=ok,
+        detail=f"{total_vias} total vias  "
         f"[recommended >= {MIN_GND_STITCH_VIAS} for MIL-STD-461 EMI shielding]",
     )
 
@@ -312,9 +356,51 @@ def check_edge_cuts(text: str) -> CheckResult:
     # Keeping it as a placeholder if needed for other scripts.
     present = '"Edge.Cuts"' in text
     return CheckResult(
-        "Board outline (Edge.Cuts)",
-        present,
-        "Edge.Cuts outline present" if present else "No Edge.Cuts outline found",
+        name="Board outline (Edge.Cuts)",
+        passed=present,
+        detail="Edge.Cuts outline present" if present else "No Edge.Cuts outline found",
+    )
+
+
+def check_net_names(nets: list[str]) -> CheckResult:
+    """Ensure all net names follow standard conventions (uppercase, no spaces)."""
+    violations: list[str] = []
+    for name in nets:
+        if " " in name:
+            violations.append(f"'{name}' contains spaces")
+        elif any(c.islower() for c in name) and not name.startswith("/"):
+            # Allow /hierarchical/net names from KiCad schematic sheets
+            violations.append(f"'{name}' contains lowercase characters")
+    if violations:
+        sample = ", ".join(violations[:3])
+        suffix = f" (+{len(violations) - 3} more)" if len(violations) > 3 else ""
+        return CheckResult(
+            name="Net Naming",
+            passed=False,
+            detail=f"{len(violations)} violation(s): {sample}{suffix}",
+        )
+    return CheckResult(
+        name="Net Naming",
+        passed=True,
+        detail=f"All {len(nets)} nets follow uppercase/no-space convention",
+    )
+
+
+def check_footprint_silkscreen(footprints: list[tuple[str, bool]]) -> CheckResult:
+    """Check that all footprints have a silkscreen reference designator."""
+    missing = [fp for fp, has_ref in footprints if not has_ref]
+    if missing:
+        sample = ", ".join(missing[:3])
+        suffix = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+        return CheckResult(
+            name="Silkscreen Refs",
+            passed=False,
+            detail=f"{len(missing)} footprint(s) missing reference: {sample}{suffix}",
+        )
+    return CheckResult(
+        name="Silkscreen Refs",
+        passed=True,
+        detail=f"All {len(footprints)} footprints have reference designators",
     )
 
 
@@ -339,6 +425,8 @@ def main(pcb_file: str) -> int:
     vias = parser.get_vias()
     tracks = parser.get_tracks()
     net_map = parser.get_net_map()
+    nets = parser.get_nets()
+    footprints = parser.get_footprint_refs()
     edge_cuts_present = parser.has_edge_cuts()
 
     all_results: list[CheckResult] = []
@@ -349,11 +437,15 @@ def main(pcb_file: str) -> int:
     all_results.append(check_gnd_stitching(vias, zones))
     all_results.append(
         CheckResult(
-            "Board outline (Edge.Cuts)",
-            edge_cuts_present,
-            "Edge.Cuts outline present" if edge_cuts_present else "No Edge.Cuts outline found",
+            name="Board outline (Edge.Cuts)",
+            passed=edge_cuts_present,
+            detail="Edge.Cuts outline present"
+            if edge_cuts_present
+            else "No Edge.Cuts outline found",
         )
     )
+    all_results.append(check_net_names(nets))
+    all_results.append(check_footprint_silkscreen(footprints))
 
     print(f"[PCB-CHECK] Results for {path.name}:")
     for r in all_results:

@@ -79,9 +79,10 @@ def _check_openems_available() -> bool:
             capture_output=True,
             timeout=5,
         )
-        return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+    else:
+        return True
 
 
 def _run_fdtd_simulation(model_dir: Path) -> Path | None:

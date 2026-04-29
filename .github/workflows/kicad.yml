@@ -70,7 +70,7 @@ jobs:
         continue-on-error: true
 
       - name: Check Simulation Results
-        run: python3 scripts/check_spice.py sim_output.txt
+        run: python3 scripts/check_mil_spice.py sim_output.txt
         continue-on-error: true
 
       # ── Upload all artifacts ─────────────────────────────────────────────────

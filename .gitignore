@@ -49,7 +49,6 @@ __pycache__/
 .venv/
 .python-version
 .uv/
-uv.lock
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/

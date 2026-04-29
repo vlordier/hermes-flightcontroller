@@ -72,11 +72,9 @@ def _script_status(script_path: Path, *args: str, check_msg: str | None = None) 
     if check_msg:
         # Find the line that matches our specific check message
         matched_line = next((line for line in lines if check_msg in line), None)
-        if matched_line:
-            evidence = matched_line
-        else:
-            evidence = lines[-1] if lines else "(no output)"
+        evidence = matched_line or (lines[-1] if lines else "(no output)")
     else:
+        matched_line = None
         evidence = lines[-1] if lines else "(no output)"
 
     if rc == 0:
@@ -167,12 +165,13 @@ def _git_sha() -> tuple[str, str]:
             text=True,
             timeout=10,
         )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return "FAIL", f"git not available: {exc}"
+    else:
         if result.returncode == 0:
             sha = result.stdout.strip()
             return "PASS", f"Git revision: {sha}"
         return "FAIL", "git describe failed -- ensure git tags are present"
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return "FAIL", f"git not available: {exc}"
 
 
 def _stackup_status(pcb_file: Path) -> tuple[str, str]:
@@ -247,10 +246,10 @@ def build_checklist(
     em_s, em_e = _em_status(reports_dir)
     pcb_s, pcb_e = _script_status(scripts_dir / "check_pcb.py", str(pcb_file))
     integ_ring_s, integ_ring_e = _script_status(
-        scripts_dir / "check_pcb_integrity.py", str(pcb_file), check_msg="Annular Rings"
+        scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Via annular rings"
     )
     integ_name_s, integ_name_e = _script_status(
-        scripts_dir / "check_pcb_integrity.py", str(pcb_file), check_msg="Net Naming"
+        scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Net Naming"
     )
     bom_s, bom_e = _script_status(scripts_dir / "check_bom.py", str(bom_file))
     git_s, git_e = _git_sha()
@@ -373,14 +372,14 @@ def build_checklist(
         CheckItem(
             "Annular Ring Integrity",
             "Via annular rings >= 0.15 mm",
-            "check_pcb_integrity.py annular ring scan",
+            "check_pcb.py annular ring scan",
             integ_ring_s,
             integ_ring_e,
         ),
         CheckItem(
             "Net Naming Hygiene",
             "Nets follow uppercase convention and naming hygiene",
-            "check_pcb_integrity.py net convention check",
+            "check_pcb.py net convention check",
             integ_name_s,
             integ_name_e,
         ),

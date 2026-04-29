@@ -5,7 +5,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class MilSettings(BaseSettings):  # type: ignore[misc]
+class MilSettings(BaseSettings):
     """Global configuration for MIL-SPEC/IPC-2221A thresholds."""
 
     # BOM Thresholds
