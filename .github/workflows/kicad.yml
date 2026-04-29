@@ -36,6 +36,8 @@ jobs:
             PCB/HermesFC/HermesFC.kicad_pcb
 
       # ── KiBot: Gerbers, BOM, PDFs, 3D renders ───────────────────────────────
+      # Note: all steps run inside ghcr.io/inti-cmnb/kicad_auto:ki8, which
+      # includes both kicad-cli and kibot. No extra installation is needed.
       - name: Generate Outputs with KiBot
         run: |
           kibot -c PCB/kibot.yaml \
@@ -44,6 +46,7 @@ jobs:
                 -e PCB/HermesFC/HermesFC.kicad_sch
 
       # ── SPICE simulation ─────────────────────────────────────────────────────
+      # The container runs as root, so no sudo prefix is required for apt-get.
       - name: Install ngspice
         run: |
           apt-get update -qq
