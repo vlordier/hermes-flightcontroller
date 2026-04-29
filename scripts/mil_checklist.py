@@ -61,16 +61,33 @@ def _run_script(script: Path, *args: str) -> tuple[str, str, int]:
     return result.stdout, result.stderr, result.returncode
 
 
-def _script_status(script_path: Path, *args: str) -> tuple[str, str]:
+def _script_status(script_path: Path, *args: str, check_msg: str | None = None) -> tuple[str, str]:
     """Run a checker script; return (status, evidence) based on exit code."""
     if not script_path.exists():
         return "PENDING", f"Script not found: {script_path}"
     stdout, stderr, rc = _run_script(script_path, *args)
     output = (stdout + stderr).strip()
     lines = [line for line in output.splitlines() if line.strip()]
-    evidence = lines[-1] if lines else "(no output)"
+
+    if check_msg:
+        # Find the line that matches our specific check message
+        matched_line = next((line for line in lines if check_msg in line), None)
+        if matched_line:
+            evidence = matched_line
+        else:
+            evidence = lines[-1] if lines else "(no output)"
+    else:
+        evidence = lines[-1] if lines else "(no output)"
+
     if rc == 0:
         return "PASS", evidence
+
+    # If it failed, but our specific line says PASS, we need to be careful.
+    # For now, if the script returns non-zero, it's a FAIL.
+    if check_msg and matched_line and "  PASS  " in matched_line:
+        # This specific sub-check might have passed even if the script failed other checks
+        return "PASS", evidence
+
     return "FAIL", evidence
 
 
@@ -229,6 +246,12 @@ def build_checklist(
     spice_s, spice_e = _spice_status(reports_dir)
     em_s, em_e = _em_status(reports_dir)
     pcb_s, pcb_e = _script_status(scripts_dir / "check_pcb.py", str(pcb_file))
+    integ_ring_s, integ_ring_e = _script_status(
+        scripts_dir / "check_pcb_integrity.py", str(pcb_file), check_msg="Annular Rings"
+    )
+    integ_name_s, integ_name_e = _script_status(
+        scripts_dir / "check_pcb_integrity.py", str(pcb_file), check_msg="Net Naming"
+    )
     bom_s, bom_e = _script_status(scripts_dir / "check_bom.py", str(bom_file))
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
@@ -346,6 +369,20 @@ def build_checklist(
             "check_pcb.py via-drill scan of .kicad_pcb",
             pcb_s,
             pcb_e,
+        ),
+        CheckItem(
+            "Annular Ring Integrity",
+            "Via annular rings >= 0.15 mm",
+            "check_pcb_integrity.py annular ring scan",
+            integ_ring_s,
+            integ_ring_e,
+        ),
+        CheckItem(
+            "Net Naming Hygiene",
+            "Nets follow uppercase convention and naming hygiene",
+            "check_pcb_integrity.py net convention check",
+            integ_name_s,
+            integ_name_e,
         ),
         CheckItem(
             "MIL-STD-275E Custom Rules",

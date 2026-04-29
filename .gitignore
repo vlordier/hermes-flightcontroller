@@ -42,6 +42,21 @@ $RECYCLE.BIN/
 *.swp
 *.swo
 
-# Python bytecode
+# Python bytecode and envs
 __pycache__/
 *.py[cod]
+*$py.class
+.venv/
+.python-version
+.uv/
+uv.lock
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# KiCad extras
+PCB/HermesFC/manufacturing/
+PCB/HermesFC/kibot/
+_autosave-*
+*.kicad_prl
+*-backups/

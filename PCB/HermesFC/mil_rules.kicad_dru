@@ -15,7 +15,7 @@
 
 # ── Trace clearance ───────────────────────────────────────────────────────────
 # MIL-STD-275E Table 1: minimum clearance for ≤100 V unpotted boards.
-# IPC-2221A Class B: 0.13 mm internal, 0.25 mm external.
+# IPC-2221A Class C (Space/Military): 0.25 mm internal, 0.25 mm external.
 (rule mil_min_clearance
   (constraint clearance (min 0.25mm))
   (condition "A.Type == 'track' && B.Type == 'track'")
@@ -42,10 +42,18 @@
 )
 
 # ── Via annular ring ─────────────────────────────────────────────────────────
-# IPC-2221A Class C (military): annular ring ≥ 0.05 mm (finished).
-# KiCad checks annular ring via (drill, pad) relationship.
+# IPC-2221A Class C (Military/Aerospace): annular ring ≥ 0.125 mm (finished external).
+# Note: external pads = finished hole + 0.3mm, internal pads = finished hole + 0.2mm.
 (rule mil_annular_ring
-  (constraint annular_width (min 0.05mm))
+  (constraint annular_width (min 0.125mm))
+)
+
+# ── Via density / thermal relief ─────────────────────────────────────────────
+# Thermal stress: avoid via clusters with spacing < 0.5 mm to prevent
+# localized substrate CTE stress near power components.
+(rule mil_via_spacing
+  (constraint hole_to_hole (min 0.5mm))
+  (condition "A.Type == 'via' && B.Type == 'via'")
 )
 
 # ── Edge clearance ────────────────────────────────────────────────────────────
@@ -65,8 +73,14 @@
 # USB VBUS (5 V) to AGND: keep extra clearance to avoid conducted noise coupling
 # per MIL-STD-461G EMI guidelines.
 (rule mil_hv_to_agnd_clearance
-  (constraint clearance (min 0.5mm))
-  (condition "A.NetName == 'VBUS' && B.NetName == 'AGND'")
+  (constraint clearance (min 0.8mm))
+  (condition "(A.NetName == 'VBUS' || A.NetName == '+5V' || A.NetName == '+3.3V') && B.NetName == 'AGND'")
+)
+
+# ── Silk to Solder Mask Clearance ─────────────────────────────────────────────
+# Prevent silkscreen on pads (outgassing / solderability issues).
+(rule mil_silk_clearance
+  (constraint silk_clearance (min 0.15mm))
 )
 
 # ── Crystal / oscillator keep-out ─────────────────────────────────────────────
