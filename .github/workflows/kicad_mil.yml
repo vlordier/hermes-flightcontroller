@@ -320,6 +320,13 @@ jobs:
           pip install pydantic pydantic-settings
           python3 scripts/check_bom.py PCB/HermesFC/manufacturing/bom.csv
 
+      - name: Run cross-domain robustness checks (thermal/RF/mechanical)
+        # Heuristic reliability checks from PCB + BOM (design-for-reliability).
+        run: |
+          pip install sexpdata pydantic
+          python3 scripts/check_robustness.py "$PCB" PCB/HermesFC/manufacturing/bom.csv
+        continue-on-error: true
+
       - name: Upload PCB/BOM check results
         if: always()
         uses: actions/upload-artifact@v4

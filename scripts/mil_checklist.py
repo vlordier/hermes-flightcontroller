@@ -308,6 +308,27 @@ def build_checklist(
         scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Net Naming"
     )
     bom_s, bom_e = _script_status(scripts_dir / "check_bom.py", str(bom_file))
+    robust_s, robust_e = _script_status(
+        scripts_dir / "check_robustness.py", str(pcb_file), str(bom_file)
+    )
+    robust_thermal_s, robust_thermal_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Thermal power-track width",
+    )
+    robust_rf_s, robust_rf_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="RF/timing crystal presence",
+    )
+    robust_mech_s, robust_mech_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Mechanical mounting points",
+    )
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
     gnd_s, gnd_e = _gnd_plane_status(pcb_file)
@@ -468,6 +489,27 @@ def build_checklist(
             gnd_s,
             gnd_e,
         ),
+        CheckItem(
+            "Thermal Robustness",
+            "Power rails sized for current and local thermal relief around PMICs",
+            "check_robustness.py thermal checks (track width + local vias)",
+            robust_thermal_s,
+            robust_thermal_e,
+        ),
+        CheckItem(
+            "RF / Timing Robustness",
+            "Crystal network present with local stitching/return vias",
+            "check_robustness.py crystal and local-via checks",
+            robust_rf_s,
+            robust_rf_e,
+        ),
+        CheckItem(
+            "Mechanical / Vibration",
+            "Mounting points and heavy-part edge margins meet vibration heuristics",
+            "check_robustness.py mounting and edge-margin checks",
+            robust_mech_s,
+            robust_mech_e,
+        ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(
             "Component LCSC Coverage",
@@ -491,6 +533,13 @@ def build_checklist(
             bom_e,
         ),
         # -- Software / Firmware traceability ---------------------------------
+        CheckItem(
+            "Robustness Aggregate",
+            "Cross-domain robustness checks (thermal/RF/mechanical) all pass",
+            "check_robustness.py",
+            robust_s,
+            robust_e,
+        ),
         CheckItem(
             "Revision Control",
             "Git SHA / tag embedded in build; clean working tree",
