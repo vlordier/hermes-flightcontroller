@@ -119,25 +119,44 @@ jobs:
             "$SCH"
         continue-on-error: true
 
-      - name: Run MIL-STD-461 CS116-like transient simulation
-        # Uses dedicated .cir files (CS116 damped-sinusoid injection source).
-        # Falls back gracefully when SPICE models are not yet present.
+      - name: Run MIL-STD-461 CS116 transient sweeps
+        # Runs three stress points (low/nominal/high) by overriding template
+        # parameters in PCB/sim/mil_cs116.cir and executing one ngspice run per case.
         run: |
           if [ -f sim.net ]; then
-            # Merge netlist with MIL transient control file (if present)
             if [ -f PCB/sim/mil_cs116.cir ]; then
-              cat PCB/sim/mil_cs116.cir sim.net > mil_sim_full.cir
+              cases=(
+                "low 0.25 1e5"
+                "nominal 0.50 1e6"
+                "high 1.00 1e7"
+              )
+
+              for case in "${cases[@]}"; do
+                set -- $case
+                tag="$1"
+                amp="$2"
+                freq="$3"
+
+                sed -E \
+                  -e "s/^\.param CS116_AMP=.*/.param CS116_AMP=${amp}/" \
+                  -e "s/^\.param CS116_FREQ=.*/.param CS116_FREQ=${freq}/" \
+                  -e "s/^\.param CS116_DAMP=.*/.param CS116_DAMP=${freq}/" \
+                  PCB/sim/mil_cs116.cir > "mil_cs116_${tag}.cir"
+
+                cat "mil_cs116_${tag}.cir" sim.net > "mil_sim_full_${tag}.cir"
+                ngspice -b -o "sim_output_${tag}.txt" "mil_sim_full_${tag}.cir" || true
+              done
             else
-              cp sim.net mil_sim_full.cir
+              cp sim.net mil_sim_full_nominal.cir
+              ngspice -b -o sim_output_nominal.txt mil_sim_full_nominal.cir || true
             fi
-            ngspice -b -o sim_output.txt mil_sim_full.cir || true
           else
-            echo "No SPICE netlist — skipping simulation." | tee sim_output.txt
+            echo "No SPICE netlist — skipping simulation." | tee sim_output_nominal.txt
           fi
         continue-on-error: true
 
-      - name: Check MIL SPICE results
-        run: python3 scripts/check_mil_spice.py sim_output.txt
+      - name: Check MIL SPICE results across sweep cases
+        run: python3 scripts/check_mil_spice.py sim_output_*.txt
         continue-on-error: true
 
       - name: Upload simulation outputs
@@ -147,8 +166,9 @@ jobs:
         with:
           name: mil-spice-results
           path: |
-            sim_output.txt
-            mil_sim_full.cir
+            sim_output_*.txt
+            mil_sim_full_*.cir
+            mil_cs116_*.cir
 
   # ── 4. OpenEMS FDTD EM simulation (RE102 / RS103 approximation) ──────────
   em-simulation:

@@ -16,13 +16,15 @@
 *
 * ── Waveform: CS116 damped sinusoid ──────────────────────────────────────────
 * V(t) = Vpk * exp(-alpha*t) * sin(2*pi*f*t)
-*   Vpeak = 0.5 V  (CS116 test level for Category 1 equipment)
-*   f     = 1 MHz  (representative; sweep 10 kHz–100 MHz in practice)
+* Default parameters below are a nominal case. CI overrides these params to
+* run a multi-case sweep (low/nominal/high stress points).
+*   Vpeak = 0.5 V (default)
+*   f     = 1 MHz (default)
 *   alpha = 2*pi*f (Q ≈ 1, critically damped)
 *
 * ngspice SIN source syntax: SIN(offset amplitude freq delay dampingfactor)
-*   dampingfactor = alpha / (2*pi) = f = 1e6 for Q=1 at 1 MHz
-* This produces V = 0.5 * exp(-6.28e6 * t) * sin(2*pi*1e6 * t)
+*   dampingfactor = alpha / (2*pi) ≈ frequency for Q=1
+* Example default: V = 0.5 * exp(-6.28e6 * t) * sin(2*pi*1e6 * t)
 
 * ── Injection source ─────────────────────────────────────────────────────────
 * This source is injected in series with the VBUS supply to the DUT.
@@ -32,7 +34,10 @@
 * Replace VBUS_RAIL and VBUS_SRC with the actual net names from your netlist.
 * If a DC source for VBUS already appears in the exported netlist, rename it
 * to drive VBUS_SRC and use the injection source below for VBUS_RAIL.
-Vcs116 VBUS_RAIL VBUS_SRC SIN(0 0.5 1Meg 0 1e6)
+.param CS116_AMP=0.5
+.param CS116_FREQ=1Meg
+.param CS116_DAMP=1Meg
+Vcs116 VBUS_RAIL VBUS_SRC SIN(0 {CS116_AMP} {CS116_FREQ} 0 {CS116_DAMP})
 
 * Nominal VBUS DC supply (5 V from USB / power path)
 Vvbus VBUS_SRC 0 DC 5.0

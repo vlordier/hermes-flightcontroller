@@ -18,6 +18,7 @@ wire up SPICE models in each component to activate full checking.
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from dataclasses import dataclass
@@ -56,6 +57,12 @@ CS116_UNDERSHOOT_LIMIT = 0.40  # 40 % below nominal → fail
 # ── MIL-STD-704F transient limits (from steady-state, <1 ms) ─────────────────
 MIL704_TRANSIENT_OVER_V = 0.5  # 500 mV above nominal absolute
 MIL704_TRANSIENT_UNDER_V = 0.5  # 500 mV below nominal absolute
+
+# ── Robustness margin targets (pre-compliance headroom) ─────────────────────
+# These are intentionally stricter than hard MIL pass/fail limits.
+DC_MARGIN_FRACTION = 0.10  # require 10% distance from min/max rails
+RIPPLE_MARGIN_FRACTION = 0.20  # require at least 20% ripple headroom
+TRANSIENT_MARGIN_FRACTION = 0.20  # require at least 20% transient headroom
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
@@ -113,12 +120,21 @@ def _check_dc(measurements: dict[str, float]) -> list[CheckResult]:
     for spec in RAIL_SPECS:
         for name, value in measurements.items():
             if re.fullmatch(spec.pattern, name, re.IGNORECASE):
-                ok = spec.vmin <= value <= spec.vmax
+                in_range = spec.vmin <= value <= spec.vmax
+                range_width = spec.vmax - spec.vmin
+                min_margin = range_width * DC_MARGIN_FRACTION
+                distance_to_limit = min(value - spec.vmin, spec.vmax - value)
+                robust = distance_to_limit >= min_margin
+                ok = in_range and robust
                 results.append(
                     CheckResult(
                         name=f"{spec.label} DC ({name})",
                         passed=ok,
-                        detail=(f"{value:.4f} V  [MIL limit: {spec.vmin}–{spec.vmax} V]"),
+                        detail=(
+                            f"{value:.4f} V  [MIL limit: {spec.vmin}–{spec.vmax} V, "
+                            f"headroom {distance_to_limit * 1000:.1f} mV, "
+                            f"target >= {min_margin * 1000:.1f} mV]"
+                        ),
                     )
                 )
     return results
@@ -148,13 +164,15 @@ def _check_ripple(ripple: dict[str, float]) -> list[CheckResult]:
         key = f"pp_{net}"
         if key in ripple:
             val_mv = ripple[key] * 1000.0  # V → mV
-            ok = val_mv <= spec.ripple_pk_mv
+            margin_limit_mv = spec.ripple_pk_mv * (1.0 - RIPPLE_MARGIN_FRACTION)
+            ok = val_mv <= margin_limit_mv
             results.append(
                 CheckResult(
                     name=f"{spec.label} ripple pk-pk",
                     passed=ok,
                     detail=(
-                        f"{val_mv:.2f} mV pk-pk  [MIL-STD-704F limit: {spec.ripple_pk_mv:.0f} mV]"
+                        f"{val_mv:.2f} mV pk-pk  [MIL limit: {spec.ripple_pk_mv:.0f} mV, "
+                        f"robustness target <= {margin_limit_mv:.1f} mV]"
                     ),
                 )
             )
@@ -183,13 +201,15 @@ def _check_transients(
             val = transients[max_key]
             over = val - nominal
             # Check absolute MIL-STD-704F limit
-            ok_abs = over <= MIL704_TRANSIENT_OVER_V
+            abs_margin_target = MIL704_TRANSIENT_OVER_V * (1.0 - TRANSIENT_MARGIN_FRACTION)
+            frac_margin_target = CS116_OVERSHOOT_LIMIT * (1.0 - TRANSIENT_MARGIN_FRACTION)
+            ok_abs = over <= abs_margin_target
             # Check fractional MIL-STD-461G CS116 limit (50 % above nominal)
-            ok_cs116 = (over / nominal) <= CS116_OVERSHOOT_LIMIT if nominal else True
+            ok_cs116 = (over / nominal) <= frac_margin_target if nominal else True
             ok = ok_abs and ok_cs116
             limit_str = (
-                f"+{MIL704_TRANSIENT_OVER_V * 1000:.0f} mV (704F) / "
-                f"+{CS116_OVERSHOOT_LIMIT * 100:.0f}% (CS116)"
+                f"+{abs_margin_target * 1000:.0f} mV (704F robust target) / "
+                f"+{frac_margin_target * 100:.0f}% (CS116 robust target)"
             )
             results.append(
                 CheckResult(
@@ -202,12 +222,14 @@ def _check_transients(
         if min_key in transients:
             val = transients[min_key]
             under = nominal - val
-            ok_abs = under <= MIL704_TRANSIENT_UNDER_V
-            ok_cs116 = (under / nominal) <= CS116_UNDERSHOOT_LIMIT if nominal else True
+            abs_margin_target = MIL704_TRANSIENT_UNDER_V * (1.0 - TRANSIENT_MARGIN_FRACTION)
+            frac_margin_target = CS116_UNDERSHOOT_LIMIT * (1.0 - TRANSIENT_MARGIN_FRACTION)
+            ok_abs = under <= abs_margin_target
+            ok_cs116 = (under / nominal) <= frac_margin_target if nominal else True
             ok = ok_abs and ok_cs116
             limit_str = (
-                f"-{MIL704_TRANSIENT_UNDER_V * 1000:.0f} mV (704F) / "
-                f"-{CS116_UNDERSHOOT_LIMIT * 100:.0f}% (CS116)"
+                f"-{abs_margin_target * 1000:.0f} mV (704F robust target) / "
+                f"-{frac_margin_target * 100:.0f}% (CS116 robust target)"
             )
             results.append(
                 CheckResult(
@@ -223,28 +245,29 @@ def _check_transients(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
-def main(output_file: str) -> int:
-    path = Path(output_file)
+def _run_single_file(path: Path) -> tuple[int, int]:
+    label = path.stem
+
     if not path.exists():
         print(
-            f"[MIL-SPICE] '{output_file}' not found — "
+            f"[MIL-SPICE:{label}] '{path}' not found — "
             "no simulation data (add SPICE models + .meas directives "
             "to activate MIL-STD-704F / CS116 checks)."
         )
-        return 0
+        return 0, 0
 
     text = path.read_text(encoding="utf-8", errors="replace")
     if not text.strip():
-        print("[MIL-SPICE] Output empty — skipping checks.")
-        return 0
+        print(f"[MIL-SPICE:{label}] Output empty — skipping checks.")
+        return 0, 0
 
     measurements = _parse_measurements(text)
     ripple = _parse_meas_ripple(text)
     transients = _parse_meas_transient(text)
 
     if not measurements:
-        print("[MIL-SPICE] No measurements found — skipping checks.")
-        return 0
+        print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
+        return 0, 0
 
     all_results: list[CheckResult] = []
     all_results += _check_dc(measurements)
@@ -252,24 +275,40 @@ def main(output_file: str) -> int:
     all_results += _check_transients(measurements, transients)
 
     if not all_results:
-        print("[MIL-SPICE] No matching rail measurements found.")
-        return 0
+        print(f"[MIL-SPICE:{label}] No matching rail measurements found.")
+        return 0, 0
 
-    print("[MIL-SPICE] Results:")
+    print(f"[MIL-SPICE:{label}] Results:")
     for r in all_results:
         print(r)
 
     failures = [r for r in all_results if not r.passed]
     if failures:
-        print(f"\n[MIL-SPICE] {len(failures)} violation(s) detected.")
-        return 1
+        print(f"\n[MIL-SPICE:{label}] {len(failures)} violation(s) detected.")
+        return 1, len(all_results)
 
-    print(f"\n[MIL-SPICE] All {len(all_results)} checks passed.")
-    return 0
+    print(f"\n[MIL-SPICE:{label}] All {len(all_results)} checks passed.")
+    return 0, len(all_results)
+
+
+def main(output_files: list[str]) -> int:
+    rc = 0
+    total_checks = 0
+    for output_file in output_files:
+        file_rc, check_count = _run_single_file(Path(output_file))
+        rc = max(rc, file_rc)
+        total_checks += check_count
+
+    print(f"\n[MIL-SPICE] Checked {len(output_files)} file(s), {total_checks} total checks.")
+    return rc
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <ngspice_output_file>")
-        sys.exit(1)
-    sys.exit(main(sys.argv[1]))
+    parser = argparse.ArgumentParser(description="Validate MIL SPICE output files.")
+    parser.add_argument(
+        "outputs",
+        nargs="+",
+        help="One or more ngspice output files to validate (single case or sweep cases).",
+    )
+    args = parser.parse_args()
+    sys.exit(main(args.outputs))
