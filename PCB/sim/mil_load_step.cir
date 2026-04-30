@@ -1,0 +1,43 @@
+* MIL Load-Step Stress Template (Buck/LDO dynamic response)
+*
+* CI concatenates this template with the exported KiCad netlist:
+*   cat mil_load_step.cir sim.net > mil_load_step.cir
+*   ngspice -b -o sim_output_load_step.txt mil_load_step.cir
+*
+* This injects synthetic current-step loads on key rails and measures
+* droop plus recovery time. Node names assume rails are named 5V/3V3/1V8.
+* If your exported net names differ, update v(5v), v(3v3), v(1v8) below.
+
+.param LS_I_LOW=0.02
+.param LS_I_HIGH=0.45
+.param LS_TSTEP=200u
+.param LS_TRISE=1u
+
+* Controlled current source: low load, then high load step
+Bload_5v 5V 0 I={LS_I_LOW + (LS_I_HIGH-LS_I_LOW)*u(time-LS_TSTEP)}
+Bload_3v3 3V3 0 I={0.5*LS_I_LOW + (0.5*LS_I_HIGH-0.5*LS_I_LOW)*u(time-LS_TSTEP)}
+Bload_1v8 1V8 0 I={0.25*LS_I_LOW + (0.25*LS_I_HIGH-0.25*LS_I_LOW)*u(time-LS_TSTEP)}
+
+.tran 200n 1m
+
+* Baseline just before step
+.meas tran ls_pre_5v avg(v(5v)) from=150u to=190u
+.meas tran ls_pre_3v3 avg(v(3v3)) from=150u to=190u
+.meas tran ls_pre_1v8 avg(v(1v8)) from=150u to=190u
+
+* Minimum after step (droop)
+.meas tran ls_min_5v min(v(5v)) from=200u to=350u
+.meas tran ls_min_3v3 min(v(3v3)) from=200u to=350u
+.meas tran ls_min_1v8 min(v(1v8)) from=200u to=350u
+
+* Derived droop metrics (volts)
+.meas tran ls_dip_5v param='ls_pre_5v-ls_min_5v'
+.meas tran ls_dip_3v3 param='ls_pre_3v3-ls_min_3v3'
+.meas tran ls_dip_1v8 param='ls_pre_1v8-ls_min_1v8'
+
+* Recovery time proxies (seconds)
+.meas tran ls_recover_5v trig v(5v) val='ls_pre_5v*0.95' fall=1 targ v(5v) val='ls_pre_5v*0.99' rise=1
+.meas tran ls_recover_3v3 trig v(3v3) val='ls_pre_3v3*0.95' fall=1 targ v(3v3) val='ls_pre_3v3*0.99' rise=1
+.meas tran ls_recover_1v8 trig v(1v8) val='ls_pre_1v8*0.95' fall=1 targ v(1v8) val='ls_pre_1v8*0.99' rise=1
+
+.end

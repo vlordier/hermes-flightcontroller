@@ -10,7 +10,7 @@ Exit codes:
   1 — one or more threshold violations detected
 
 Usage:
-    python3 check_mil_spice.py <ngspice_output_file>
+    python3 check_mil_spice.py <ngspice_output_file> [<ngspice_output_file> ...]
 
 Add simulation directives (.op / .tran / .meas) to the KiCad schematic and
 wire up SPICE models in each component to activate full checking.
@@ -64,6 +64,18 @@ DC_MARGIN_FRACTION = 0.10  # require 10% distance from min/max rails
 RIPPLE_MARGIN_FRACTION = 0.20  # require at least 20% ripple headroom
 TRANSIENT_MARGIN_FRACTION = 0.20  # require at least 20% transient headroom
 
+# ── Load-step robustness targets (design margin, not MIL hard limits) ───────
+LOAD_STEP_DROOP_LIMIT_MV: dict[str, float] = {
+    "5v": 250.0,
+    "3v3": 160.0,
+    "1v8": 120.0,
+}
+LOAD_STEP_RECOVERY_TARGET_US: dict[str, float] = {
+    "5v": 400.0,
+    "3v3": 300.0,
+    "1v8": 250.0,
+}
+
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +111,19 @@ def _parse_meas_transient(text: str) -> dict[str, float]:
     """
     results = _parse_measurements(text)
     return {k: v for k, v in results.items() if k.startswith("max_") or k.startswith("min_")}
+
+
+def _parse_meas_load_step(text: str) -> dict[str, float]:
+    """Extract load-step metrics from .meas outputs.
+
+    Convention:
+        - ls_dip_<rail>      : droop in volts during load step
+        - ls_recover_<rail>  : recovery time in seconds
+    """
+    results = _parse_measurements(text)
+    return {
+        k: v for k, v in results.items() if k.startswith("ls_dip_") or k.startswith("ls_recover_")
+    }
 
 
 # ── Checks ────────────────────────────────────────────────────────────────────
@@ -242,6 +267,40 @@ def _check_transients(
     return results
 
 
+def _check_load_step(load_step: dict[str, float]) -> list[CheckResult]:
+    """Validate load-step droop and recovery time metrics."""
+    results: list[CheckResult] = []
+    for rail, droop_limit_mv in LOAD_STEP_DROOP_LIMIT_MV.items():
+        dip_key = f"ls_dip_{rail}"
+        recover_key = f"ls_recover_{rail}"
+        rail_label = rail.upper()
+
+        if dip_key in load_step:
+            droop_mv = load_step[dip_key] * 1000.0
+            ok = droop_mv <= droop_limit_mv
+            results.append(
+                CheckResult(
+                    name=f"{rail_label} load-step droop",
+                    passed=ok,
+                    detail=(f"{droop_mv:.1f} mV  " f"[target <= {droop_limit_mv:.0f} mV]"),
+                )
+            )
+
+        if recover_key in load_step:
+            recover_us = load_step[recover_key] * 1_000_000.0
+            target_us = LOAD_STEP_RECOVERY_TARGET_US[rail]
+            ok = recover_us <= target_us
+            results.append(
+                CheckResult(
+                    name=f"{rail_label} load-step recovery",
+                    passed=ok,
+                    detail=(f"{recover_us:.1f} us  " f"[target <= {target_us:.0f} us]"),
+                )
+            )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -264,6 +323,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     measurements = _parse_measurements(text)
     ripple = _parse_meas_ripple(text)
     transients = _parse_meas_transient(text)
+    load_step = _parse_meas_load_step(text)
 
     if not measurements:
         print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
@@ -273,6 +333,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     all_results += _check_dc(measurements)
     all_results += _check_ripple(ripple)
     all_results += _check_transients(measurements, transients)
+    all_results += _check_load_step(load_step)
 
     if not all_results:
         print(f"[MIL-SPICE:{label}] No matching rail measurements found.")
