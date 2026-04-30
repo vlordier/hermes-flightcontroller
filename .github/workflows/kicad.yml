@@ -73,6 +73,11 @@ jobs:
         run: python3 scripts/check_mil_spice.py sim_output.txt
         continue-on-error: true
 
+      # ── Manufacturing readiness check ────────────────────────────────────────
+      - name: Check Manufacturing Files (BOM vs Positions)
+        run: python3 scripts/check_manufacturing.py
+        # Validates committed bom.csv vs positions.csv — fails CI if they diverge.
+
       # ── Upload all artifacts ─────────────────────────────────────────────────
       - name: Upload Reports
         if: always()
@@ -90,4 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: manufacturing-files
-          path: output/
+          path: |
+            output/assembly/
+            output/fab/
+            output/bom/

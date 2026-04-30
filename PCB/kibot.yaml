@@ -89,15 +89,85 @@ outputs:
       - layer: In2.Cu
       - layer: Edge.Cuts
 
-  # ── Pick-and-place / assembly ────────────────────────────────────────────────
+  # ── Pick-and-place / assembly (generic) ─────────────────────────────────────
   - name: position
-    comment: Component placement file (pick-and-place)
+    comment: Component placement file (pick-and-place, all layers)
     type: position
     dir: assembly
     options:
       format: CSV
       units: millimeters
       separate_files_for_front_and_back: false
+
+  # ── JLCPCB SMT assembly outputs ──────────────────────────────────────────────
+  # JLCPCB BOM requires: Comment, Designator, Footprint, LCSC Part #
+  - name: jlcpcb_bom
+    comment: BOM formatted for JLCPCB SMT assembly service
+    type: bom
+    dir: assembly/jlcpcb
+    options:
+      output: '%f_jlcpcb_bom.%x'
+      ref_separator: ','
+      group_components: true
+      sort_style: type_value
+      columns:
+        - field: Value
+          name: Comment
+        - field: References
+          name: Designator
+        - field: Footprint
+          name: Footprint
+        - field: 'LCSC Part #'
+          name: 'LCSC Part #'
+
+  # JLCPCB CPL requires: Designator, Val, Package, Mid X, Mid Y, Rotation, Layer
+  - name: jlcpcb_cpl
+    comment: Component placement list for JLCPCB SMT assembly service
+    type: position
+    dir: assembly/jlcpcb
+    options:
+      output: '%f_jlcpcb_cpl.%x'
+      format: CSV
+      units: millimeters
+      separate_files_for_front_and_back: false
+      only_smd: true
+      columns:
+        - id: Ref
+          name: Designator
+        - id: Val
+          name: Val
+        - id: Package
+          name: Package
+        - id: PosX
+          name: 'Mid X'
+        - id: PosY
+          name: 'Mid Y'
+        - id: Rot
+          name: Rotation
+        - id: Side
+          name: Layer
+
+  # ── Interactive BOM (assembly aid) ───────────────────────────────────────────
+  - name: ibom
+    comment: Interactive HTML BOM for manual assembly verification
+    type: ibom
+    dir: assembly
+    options:
+      blacklist: 'DNP'
+      name_format: '%f_ibom'
+
+  # ── Gerber + drill zip for fab upload ────────────────────────────────────────
+  - name: gerber_fab_zip
+    comment: Gerber and drill files zipped for fab upload (JLCPCB/PCBWay)
+    type: compress
+    dir: fab
+    options:
+      output: '%f_gerbers.%x'
+      files:
+        - from_output: gerbers
+          dest: /
+        - from_output: drill
+          dest: /
 
   # ── 3D renders ───────────────────────────────────────────────────────────────
   - name: render_top
