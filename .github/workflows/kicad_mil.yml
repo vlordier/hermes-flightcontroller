@@ -183,8 +183,40 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run startup and brownout stress cases
+        # Exercises startup ramp behavior and temporary brownout recovery.
+        run: |
+          if [ -f sim.net ] && [ -f PCB/sim/mil_startup_brownout.cir ]; then
+            cases=(
+              "nominal 5m 1.0 3m"
+              "slow_ramp_deep_dip 12m 1.8 6m"
+            )
+
+            for case in "${cases[@]}"; do
+              set -- $case
+              tag="$1"
+              rise="$2"
+              drop="$3"
+              dur="$4"
+
+              sed -E \
+                -e "s/^\.param SU_RISE=.*/.param SU_RISE=${rise}/" \
+                -e "s/^\.param BO_DROP=.*/.param BO_DROP=${drop}/" \
+                -e "s/^\.param BO_DUR=.*/.param BO_DUR=${dur}/" \
+                PCB/sim/mil_startup_brownout.cir > "mil_startup_brownout_${tag}.cir"
+
+              cat "mil_startup_brownout_${tag}.cir" sim.net > "mil_sim_startup_${tag}.cir"
+              ngspice -b -o "sim_output_startup_${tag}.txt" "mil_sim_startup_${tag}.cir" || true
+            done
+          else
+            echo "No netlist or startup template — skipping startup/brownout sweeps." | tee sim_output_startup_skip.txt
+          fi
+        continue-on-error: true
+
       - name: Check MIL SPICE results across sweep cases
-        run: python3 scripts/check_mil_spice.py sim_output_*.txt
+        run: |
+          set -o pipefail
+          python3 scripts/check_mil_spice.py sim_output_*.txt 2>&1 | tee spice_check_report.txt
         continue-on-error: true
 
       - name: Upload simulation outputs
@@ -195,10 +227,13 @@ jobs:
           name: mil-spice-results
           path: |
             sim_output_*.txt
+            spice_check_report.txt
             mil_sim_full_*.cir
             mil_cs116_*.cir
             mil_sim_load_*.cir
             mil_load_step_*.cir
+            mil_sim_startup_*.cir
+            mil_startup_brownout_*.cir
 
   # ── 4. OpenEMS FDTD EM simulation (RE102 / RS103 approximation) ──────────
   em-simulation:

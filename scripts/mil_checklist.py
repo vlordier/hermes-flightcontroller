@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import glob
 import re
 import subprocess
 import sys
@@ -127,19 +128,74 @@ def _drc_status(reports_dir: Path) -> tuple[str, str]:
 
 
 def _spice_status(reports_dir: Path) -> tuple[str, str]:
-    """Return (status, evidence) from sim_output.txt."""
-    path = reports_dir / "sim_output.txt"
-    if not path.exists():
-        return "PENDING", "sim_output.txt not found"
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if "violation(s) detected" in text:
-        fails = sum(1 for line in text.splitlines() if "FAIL" in line)
-        return "FAIL", f"{fails} SPICE threshold violation(s)"
-    if "All" in text and "checks passed" in text:
-        return "PASS", "All SPICE rail checks passed"
-    if not text.strip():
-        return "PENDING", "No simulation output (SPICE models not yet added)"
-    return "PENDING", "Simulation ran; no .meas results parsed"
+    """Return aggregate (status, evidence) from sim_output_*.txt and checker report."""
+    spice_logs = sorted(glob.glob(str(reports_dir / "sim_output*.txt")))
+    if not spice_logs:
+        return "PENDING", "sim_output*.txt not found"
+
+    report_path = reports_dir / "spice_check_report.txt"
+    if report_path.exists():
+        report = report_path.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"Checked\s+(\d+)\s+file\(s\),\s+(\d+)\s+total checks", report)
+        checked_str = f"{len(spice_logs)} file(s)"
+        if m:
+            checked_str = f"{m.group(1)} file(s), {m.group(2)} checks"
+        if "violation(s) detected" in report:
+            fail_lines = sum(1 for line in report.splitlines() if "  FAIL  " in line)
+            return "FAIL", f"{fail_lines} SPICE check failure(s) across {checked_str}"
+        if "All" in report and "checks passed" in report:
+            return "PASS", f"SPICE robustness checks passed across {checked_str}"
+
+    has_content = False
+    for file in spice_logs:
+        text = Path(file).read_text(encoding="utf-8", errors="replace")
+        if text.strip():
+            has_content = True
+            break
+    if has_content:
+        return "PENDING", f"SPICE outputs present ({len(spice_logs)} files), checker report missing"
+    return "PENDING", "No simulation output (SPICE models not yet added)"
+
+
+def _parse_spice_margin_items(reports_dir: Path) -> list[CheckItem]:
+    """Parse per-check PASS/FAIL margin lines from spice_check_report.txt."""
+    report_path = reports_dir / "spice_check_report.txt"
+    if not report_path.exists():
+        return []
+
+    lines = report_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    items: list[CheckItem] = []
+    current_case = "unknown"
+
+    for raw in lines:
+        case_match = re.match(r"\[MIL-SPICE:([^\]]+)\]\s+Results:", raw)
+        if case_match:
+            current_case = case_match.group(1)
+            continue
+
+        check_match = re.match(r"\s*(PASS|FAIL)\s+(.+?):\s+(.+)", raw)
+        if not check_match:
+            continue
+        status, name, detail = check_match.groups()
+
+        # Include only margin-bearing checks in the report expansion.
+        if not any(
+            token in name.lower()
+            for token in ("dc", "ripple", "transient", "load-step", "startup", "brownout")
+        ):
+            continue
+
+        items.append(
+            CheckItem(
+                section=f"SPICE Margin / {current_case}",
+                requirement=f"{name} within configured robustness margin",
+                method="scripts/check_mil_spice.py parsed from spice_check_report.txt",
+                status=status,
+                evidence=detail,
+            )
+        )
+
+    return items
 
 
 def _em_status(reports_dir: Path) -> tuple[str, str]:
@@ -255,6 +311,7 @@ def build_checklist(
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
     gnd_s, gnd_e = _gnd_plane_status(pcb_file)
+    spice_margin_items = _parse_spice_margin_items(reports_dir)
 
     # Requirements traceability (Doorstop)
     door_s, door_e = "PENDING", "Doorstop data not found"
@@ -281,7 +338,7 @@ def build_checklist(
     dru_s = "PASS" if kicad_dru.exists() else "FAIL"
     dru_e = "mil_rules.kicad_dru present" if kicad_dru.exists() else "mil_rules.kicad_dru missing"
 
-    return [
+    base_items = [
         # -- MIL-STD-461G -----------------------------------------------------
         CheckItem(
             "MIL-STD-461G RE102",
@@ -450,6 +507,8 @@ def build_checklist(
             door_e,
         ),
     ]
+
+    return base_items + spice_margin_items
 
 
 # ---- Report renderer ---------------------------------------------------------

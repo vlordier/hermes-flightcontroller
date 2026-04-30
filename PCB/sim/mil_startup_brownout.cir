@@ -1,0 +1,53 @@
+* MIL Startup + Brownout Stress Template
+*
+* CI concatenates this template with exported KiCad netlist:
+*   cat mil_startup_brownout.cir sim.net > mil_startup_brownout_case.cir
+*   ngspice -b -o sim_output_startup_case.txt mil_startup_brownout_case.cir
+*
+* This deck injects supply ramp and a temporary brownout event, then measures:
+*   - Startup rise time (su_rise_<rail>)
+*   - Brownout dip magnitude (bo_dip_<rail>)
+*   - Brownout recovery time (bo_recover_<rail>)
+
+.param SU_VLOW=0.0
+.param SU_VHIGH=5.0
+.param SU_RISE=5m
+.param BO_START=20m
+.param BO_DUR=3m
+.param BO_DROP=1.0
+
+* Platform supply profile: startup ramp + brownout dip + recovery.
+* If netlist already defines VBUS source, adapt node names accordingly.
+Bvbus VBUS_SRC 0 V={
++  (time < SU_RISE) ? (SU_VLOW + (SU_VHIGH-SU_VLOW)*(time/SU_RISE)) :
++  ((time >= BO_START && time < BO_START+BO_DUR) ? (SU_VHIGH-BO_DROP) : SU_VHIGH)
++}
+
+.tran 5u 40m
+
+* Baseline voltages before brownout.
+.meas tran bo_pre_5v avg(v(5v)) from=18m to=19m
+.meas tran bo_pre_3v3 avg(v(3v3)) from=18m to=19m
+.meas tran bo_pre_1v8 avg(v(1v8)) from=18m to=19m
+
+* Startup rise time: first crossing to 95% nominal.
+.meas tran su_rise_5v when v(5v)=4.75 rise=1
+.meas tran su_rise_3v3 when v(3v3)=3.135 rise=1
+.meas tran su_rise_1v8 when v(1v8)=1.71 rise=1
+
+* Brownout minima.
+.meas tran bo_min_5v min(v(5v)) from=20m to=24m
+.meas tran bo_min_3v3 min(v(3v3)) from=20m to=24m
+.meas tran bo_min_1v8 min(v(1v8)) from=20m to=24m
+
+* Derived dip magnitudes (volts).
+.meas tran bo_dip_5v param='bo_pre_5v-bo_min_5v'
+.meas tran bo_dip_3v3 param='bo_pre_3v3-bo_min_3v3'
+.meas tran bo_dip_1v8 param='bo_pre_1v8-bo_min_1v8'
+
+* Recovery time from dip to 99% baseline.
+.meas tran bo_recover_5v trig v(5v) val='bo_pre_5v*0.95' fall=1 targ v(5v) val='bo_pre_5v*0.99' rise=1
+.meas tran bo_recover_3v3 trig v(3v3) val='bo_pre_3v3*0.95' fall=1 targ v(3v3) val='bo_pre_3v3*0.99' rise=1
+.meas tran bo_recover_1v8 trig v(1v8) val='bo_pre_1v8*0.95' fall=1 targ v(1v8) val='bo_pre_1v8*0.99' rise=1
+
+.end

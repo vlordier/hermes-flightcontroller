@@ -2,8 +2,8 @@
 """MIL-STD-461 / MIL-STD-704 SPICE output validator.
 
 Checks power-rail DC levels, voltage ripple (MIL-STD-704F limits), conducted
-transient overshoot (MIL-STD-461G CS101/CS116 limits), and power-sequencing
-timing against configured thresholds.
+transient overshoot (MIL-STD-461G CS101/CS116 limits), load-step dynamic
+response, and startup/brownout recovery against configured thresholds.
 
 Exit codes:
   0 — all checks passed (or no simulation data present)
@@ -76,6 +76,23 @@ LOAD_STEP_RECOVERY_TARGET_US: dict[str, float] = {
     "1v8": 250.0,
 }
 
+# ── Startup / brownout robustness targets ───────────────────────────────────
+STARTUP_RISE_TARGET_MS: dict[str, float] = {
+    "5v": 12.0,
+    "3v3": 10.0,
+    "1v8": 8.0,
+}
+BROWNOUT_DIP_LIMIT_MV: dict[str, float] = {
+    "5v": 350.0,
+    "3v3": 220.0,
+    "1v8": 160.0,
+}
+BROWNOUT_RECOVERY_TARGET_US: dict[str, float] = {
+    "5v": 1000.0,
+    "3v3": 800.0,
+    "1v8": 600.0,
+}
+
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +140,22 @@ def _parse_meas_load_step(text: str) -> dict[str, float]:
     results = _parse_measurements(text)
     return {
         k: v for k, v in results.items() if k.startswith("ls_dip_") or k.startswith("ls_recover_")
+    }
+
+
+def _parse_meas_startup_brownout(text: str) -> dict[str, float]:
+    """Extract startup and brownout metrics from .meas outputs.
+
+    Convention:
+        - su_rise_<rail>       : startup rise time in seconds
+        - bo_dip_<rail>        : brownout droop in volts
+        - bo_recover_<rail>    : brownout recovery time in seconds
+    """
+    results = _parse_measurements(text)
+    return {
+        k: v
+        for k, v in results.items()
+        if k.startswith("su_rise_") or k.startswith("bo_dip_") or k.startswith("bo_recover_")
     }
 
 
@@ -301,6 +334,53 @@ def _check_load_step(load_step: dict[str, float]) -> list[CheckResult]:
     return results
 
 
+def _check_startup_brownout(startup_brownout: dict[str, float]) -> list[CheckResult]:
+    """Validate startup rise time and brownout dip/recovery metrics."""
+    results: list[CheckResult] = []
+    for rail, rise_target_ms in STARTUP_RISE_TARGET_MS.items():
+        rise_key = f"su_rise_{rail}"
+        dip_key = f"bo_dip_{rail}"
+        recover_key = f"bo_recover_{rail}"
+        rail_label = rail.upper()
+
+        if rise_key in startup_brownout:
+            rise_ms = startup_brownout[rise_key] * 1000.0
+            ok = rise_ms <= rise_target_ms
+            results.append(
+                CheckResult(
+                    name=f"{rail_label} startup rise",
+                    passed=ok,
+                    detail=f"{rise_ms:.2f} ms  [target <= {rise_target_ms:.1f} ms]",
+                )
+            )
+
+        if dip_key in startup_brownout:
+            dip_mv = startup_brownout[dip_key] * 1000.0
+            dip_limit_mv = BROWNOUT_DIP_LIMIT_MV[rail]
+            ok = dip_mv <= dip_limit_mv
+            results.append(
+                CheckResult(
+                    name=f"{rail_label} brownout dip",
+                    passed=ok,
+                    detail=f"{dip_mv:.1f} mV  [target <= {dip_limit_mv:.0f} mV]",
+                )
+            )
+
+        if recover_key in startup_brownout:
+            recover_us = startup_brownout[recover_key] * 1_000_000.0
+            recover_target_us = BROWNOUT_RECOVERY_TARGET_US[rail]
+            ok = recover_us <= recover_target_us
+            results.append(
+                CheckResult(
+                    name=f"{rail_label} brownout recovery",
+                    passed=ok,
+                    detail=f"{recover_us:.1f} us  [target <= {recover_target_us:.0f} us]",
+                )
+            )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -324,6 +404,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     ripple = _parse_meas_ripple(text)
     transients = _parse_meas_transient(text)
     load_step = _parse_meas_load_step(text)
+    startup_brownout = _parse_meas_startup_brownout(text)
 
     if not measurements:
         print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
@@ -334,6 +415,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     all_results += _check_ripple(ripple)
     all_results += _check_transients(measurements, transients)
     all_results += _check_load_step(load_step)
+    all_results += _check_startup_brownout(startup_brownout)
 
     if not all_results:
         print(f"[MIL-SPICE:{label}] No matching rail measurements found.")
