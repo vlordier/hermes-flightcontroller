@@ -404,6 +404,33 @@ def check_footprint_silkscreen(footprints: list[tuple[str, bool]]) -> CheckResul
     )
 
 
+# Power nets that should have copper pour zones (not just routed traces).
+REQUIRED_POWER_ZONES = {"5V", "3V3", "1V8"}
+
+
+def check_power_zone_fills(zones: list[dict[str, str]]) -> CheckResult:
+    """Verify major power rails have dedicated copper pour zones.
+
+    Polygon fills on power nets reduce DC resistance, improve thermal spread,
+    and lower EMI compared to routed traces alone.  This is recommended by
+    IPC-2221A and the MIL-STD-461G power-lead conducted-susceptibility guidance.
+    """
+    zone_nets = {z["net_name"].upper() for z in zones}
+    missing = [n for n in REQUIRED_POWER_ZONES if not any(n in zn for zn in zone_nets)]
+    if not missing:
+        found = sorted(n for n in REQUIRED_POWER_ZONES if any(n in zn for zn in zone_nets))
+        return CheckResult(
+            name="Power zone fills",
+            passed=True,
+            detail=f"Copper pours present for: {', '.join(found)}",
+        )
+    return CheckResult(
+        name="Power zone fills",
+        passed=False,
+        detail=f"Missing power zone fills for: {', '.join(sorted(missing))} — add polygon pours on these nets",
+    )
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -446,6 +473,7 @@ def main(pcb_file: str) -> int:
     )
     all_results.append(check_net_names(nets))
     all_results.append(check_footprint_silkscreen(footprints))
+    all_results.append(check_power_zone_fills(zones))
 
     print(f"[PCB-CHECK] Results for {path.name}:")
     for r in all_results:

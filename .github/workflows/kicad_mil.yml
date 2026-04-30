@@ -241,6 +241,34 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run component tolerance corner sweeps
+        # Worst-case passive variation: nom / worst_hi / worst_lo
+        run: |
+          if [ -f sim.net ] && [ -f PCB/sim/mil_corner.cir ]; then
+            corners=(
+              "nom    1.00 1.00 1.00"
+              "hi     1.10 1.20 1.15"
+              "lo     0.90 0.80 0.85"
+            )
+
+            for corner in "${corners[@]}"; do
+              set -- $corner
+              tag="$1"; rtol="$2"; ctol="$3"; ltol="$4"
+
+              sed -E \
+                -e "s/^\.param RTOL=.*/.param RTOL=${rtol}/" \
+                -e "s/^\.param CTOL=.*/.param CTOL=${ctol}/" \
+                -e "s/^\.param LTOL=.*/.param LTOL=${ltol}/" \
+                PCB/sim/mil_corner.cir > "mil_corner_${tag}.cir"
+
+              cat "mil_corner_${tag}.cir" sim.net > "mil_sim_corner_${tag}.cir"
+              ngspice -b -o "sim_output_corner_${tag}.txt" "mil_sim_corner_${tag}.cir" || true
+            done
+          else
+            echo "No netlist or corner template — skipping corner sweeps." | tee sim_output_corner_skip.txt
+          fi
+        continue-on-error: true
+
       - name: Check MIL SPICE results across sweep cases
         run: |
           set -o pipefail
@@ -264,6 +292,8 @@ jobs:
             mil_startup_brownout_*.cir
             mil_sim_pi_*.cir
             mil_pi_sweep_*.cir
+            mil_sim_corner_*.cir
+            mil_corner_*.cir
 
   # ── 4. OpenEMS FDTD EM simulation (RE102 / RS103 approximation) ──────────
   em-simulation:

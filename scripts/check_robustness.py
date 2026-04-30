@@ -42,6 +42,13 @@ class Via:
 class Track:
     width_mm: float
     net_id: int
+    start: tuple[float, float] = (0.0, 0.0)
+    end: tuple[float, float] = (0.0, 0.0)
+
+    @property
+    def length_mm(self) -> float:
+        """Euclidean length of this segment in mm."""
+        return math.hypot(self.end[0] - self.start[0], self.end[1] - self.start[1])
 
 
 class CheckResult(BaseModel):
@@ -88,6 +95,14 @@ USB_DM_KEYWORDS = ("D-", "DM", "USB_DM", "USBDM", "USB-")
 # ~0.17 mm ± 30 % manufacturing tolerance.
 USB_DIFF_WIDTH_MIN_MM = 0.10
 USB_DIFF_WIDTH_MAX_MM = 0.30
+
+# Maximum allowed length mismatch between USB D+ and D- (IPC-2141A guidance).
+# USB 2.0 FS/HS differential skew budget ≈ 200 ps; at 180 mm/ns in FR4 that
+# is ~36 mm, but practical routing targets keep mismatch under 2.5 mm.
+USB_DIFF_SKEW_LIMIT_MM = 2.5
+
+# Minimum number of test-point (TP*) footprints for adequate probeability.
+MIN_TEST_POINTS = 2
 
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -196,6 +211,7 @@ def _parse_board(  # noqa: C901
         if sym == sexpdata.Symbol("segment"):
             width = 0.0
             net_id = 0
+            sx = sy = ex = ey = 0.0
             for prop in item:
                 if not isinstance(prop, list):
                     continue
@@ -203,7 +219,11 @@ def _parse_board(  # noqa: C901
                     width = float(prop[1])
                 if prop[0] == sexpdata.Symbol("net") and len(prop) >= 2:
                     net_id = int(prop[1])
-            tracks.append(Track(width_mm=width, net_id=net_id))
+                if prop[0] == sexpdata.Symbol("start") and len(prop) >= 3:
+                    sx, sy = float(prop[1]), float(prop[2])
+                if prop[0] == sexpdata.Symbol("end") and len(prop) >= 3:
+                    ex, ey = float(prop[1]), float(prop[2])
+            tracks.append(Track(width_mm=width, net_id=net_id, start=(sx, sy), end=(ex, ey)))
             continue
 
         if str(sym).startswith("gr_"):
@@ -509,6 +529,78 @@ def check_decoupling_proximity(
     return results
 
 
+def check_diff_pair_length_matching(
+    tracks: list[Track], net_map: dict[int, str]
+) -> list[CheckResult]:
+    """Check that USB D+ and D- route lengths are within the skew budget.
+
+    Sums track segment lengths per differential signal and flags pairs whose
+    mismatch exceeds USB_DIFF_SKEW_LIMIT_MM.  Length matching is critical for
+    USB signal integrity; IPC-2141A recommends < 5 mil (0.13 mm) per inch of
+    trace, but practical 2.5 mm total-mismatch targets are industry standard.
+    """
+
+    def _net_length(keywords: tuple[str, ...]) -> float | None:
+        segs = [
+            t
+            for t in tracks
+            if any(kw.upper() in net_map.get(t.net_id, "").upper() for kw in keywords)
+        ]
+        if not segs:
+            return None
+        return sum(t.length_mm for t in segs)
+
+    len_dp = _net_length(USB_DP_KEYWORDS)
+    len_dm = _net_length(USB_DM_KEYWORDS)
+
+    if len_dp is None or len_dm is None:
+        return [
+            CheckResult(
+                name="USB diff-pair length matching",
+                passed=False,
+                detail="One or both USB D+/D- nets not found — check net naming",
+            )
+        ]
+
+    skew = abs(len_dp - len_dm)
+    passed = skew <= USB_DIFF_SKEW_LIMIT_MM
+    return [
+        CheckResult(
+            name="USB diff-pair length matching",
+            passed=passed,
+            detail=(
+                f"D+={len_dp:.2f} mm  D-={len_dm:.2f} mm  skew={skew:.2f} mm "
+                f"[limit {USB_DIFF_SKEW_LIMIT_MM} mm]"
+                if passed
+                else f"Skew {skew:.2f} mm exceeds {USB_DIFF_SKEW_LIMIT_MM} mm limit "
+                f"(D+={len_dp:.2f} mm, D-={len_dm:.2f} mm) — add length-matching serpentines"
+            ),
+        )
+    ]
+
+
+def check_test_point_coverage(footprints: list[Footprint]) -> CheckResult:
+    """Verify adequate test-point (TP*) footprints exist for probeability.
+
+    Test points on key power and signal nets enable in-circuit debugging and
+    production testing.  MIL-STD-2000A and IPC-7711/7721 recommend accessible
+    test pads for all critical nets.
+    """
+    tp_fps = [fp for fp in footprints if fp.ref.upper().startswith("TP")]
+    count = len(tp_fps)
+    passed = count >= MIN_TEST_POINTS
+    return CheckResult(
+        name="Test-point coverage",
+        passed=passed,
+        detail=(
+            f"{count} test-point footprint(s) found [target >= {MIN_TEST_POINTS}]"
+            if passed
+            else f"Only {count} test-point footprint(s) found — add TP* pads on key nets "
+            f"(power rails, UART, SWD) [target >= {MIN_TEST_POINTS}]"
+        ),
+    )
+
+
 def check_impedance_controlled_traces(
     tracks: list[Track], net_map: dict[int, str]
 ) -> list[CheckResult]:
@@ -594,6 +686,8 @@ def main(pcb_file: str, bom_file: str) -> int:
     results += check_current_density(tracks, net_map)
     results += check_decoupling_proximity(footprints, bom_values)
     results += check_impedance_controlled_traces(tracks, net_map)
+    results += check_diff_pair_length_matching(tracks, net_map)
+    results.append(check_test_point_coverage(footprints))
 
     print(f"[ROBUSTNESS] Results for {pcb_path.name} + {bom_path.name}:")
     for r in results:

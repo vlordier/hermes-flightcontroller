@@ -457,6 +457,82 @@ def _check_pi_frequency(pi_metrics: dict[str, float]) -> list[CheckResult]:
     return results
 
 
+# ── Component tolerance corner sweep ──────────────────────────────────────────
+
+# Voltage deviation allowed at any corner relative to nominal ± tolerance.
+# IPC-2221A requires power rails stay within ±5 % across component corners.
+CORNER_VOUT_TOLERANCE_FRACTION = 0.05
+
+# Ripple budget for component corners in mV (tighter than MIL hard limit).
+CORNER_RIPPLE_LIMIT_MV: dict[str, float] = {
+    "5v": 60.0,
+    "3v3": 36.0,
+    "1v8": 24.0,
+}
+
+# Nominal output voltages for each rail (used to compute %-deviation).
+CORNER_NOMINAL_V: dict[str, float] = {
+    "5v": 5.0,
+    "3v3": 3.3,
+    "1v8": 1.8,
+}
+
+
+def _parse_meas_corner(text: str) -> dict[str, float]:
+    """Extract component-tolerance corner sweep results.
+
+    Convention:
+        - corner_vout_<rail>    : average output voltage during settled period
+        - corner_ripple_<rail>  : peak-to-peak ripple during settled period
+        - corner_fb_<rail>      : feedback node voltage
+    """
+    results = _parse_measurements(text)
+    return {
+        k: v
+        for k, v in results.items()
+        if k.startswith("corner_vout_")
+        or k.startswith("corner_ripple_")
+        or k.startswith("corner_fb_")
+    }
+
+
+def _check_corner_sweep(corner: dict[str, float]) -> list[CheckResult]:
+    """Validate component-corner sweep output voltages and ripple budgets."""
+    results: list[CheckResult] = []
+
+    for rail, nominal in CORNER_NOMINAL_V.items():
+        vout_key = f"corner_vout_{rail}"
+        if vout_key in corner:
+            vout = corner[vout_key]
+            dev_frac = abs(vout - nominal) / nominal
+            ok = dev_frac <= CORNER_VOUT_TOLERANCE_FRACTION
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} corner Vout deviation",
+                    passed=ok,
+                    detail=(
+                        f"{vout:.4f} V  dev={dev_frac * 100:.2f} %  "
+                        f"[limit ±{CORNER_VOUT_TOLERANCE_FRACTION * 100:.0f} % of {nominal} V]"
+                    ),
+                )
+            )
+
+        ripple_key = f"corner_ripple_{rail}"
+        if ripple_key in corner:
+            ripple_mv = corner[ripple_key] * 1000.0
+            limit_mv = CORNER_RIPPLE_LIMIT_MV.get(rail, 60.0)
+            ok = ripple_mv <= limit_mv
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} corner ripple",
+                    passed=ok,
+                    detail=f"{ripple_mv:.2f} mV pk-pk  [limit {limit_mv:.0f} mV]",
+                )
+            )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -482,6 +558,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     load_step = _parse_meas_load_step(text)
     startup_brownout = _parse_meas_startup_brownout(text)
     pi_metrics = _parse_meas_pi(text)
+    corner = _parse_meas_corner(text)
 
     if not measurements:
         print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
@@ -494,6 +571,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     all_results += _check_load_step(load_step)
     all_results += _check_startup_brownout(startup_brownout)
     all_results += _check_pi_frequency(pi_metrics)
+    all_results += _check_corner_sweep(corner)
 
     if not all_results:
         print(f"[MIL-SPICE:{label}] No matching rail measurements found.")

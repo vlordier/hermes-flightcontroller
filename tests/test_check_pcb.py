@@ -1,4 +1,4 @@
-from scripts.check_pcb import PcbParser, check_stackup
+from scripts.check_pcb import PcbParser, check_power_zone_fills, check_stackup
 
 
 def test_stackup_detection() -> None:
@@ -35,3 +35,24 @@ def test_has_edge_cuts() -> None:
     pcb_text_no_edge = '(kicad_pcb (gr_line (start 0 0) (end 10 0) (layer "F.SilkS") (width 0.1)))'
     parser_no_edge = PcbParser(pcb_text_no_edge)
     assert parser_no_edge.has_edge_cuts() is False
+
+
+def test_power_zone_fills_passes_when_all_present() -> None:
+    zones = [
+        {"net_name": "5V", "layer": "F.Cu"},
+        {"net_name": "3V3", "layer": "In2.Cu"},
+        {"net_name": "1V8", "layer": "B.Cu"},
+        {"net_name": "GND", "layer": "In1.Cu"},
+    ]
+    result = check_power_zone_fills(zones)
+    assert result.passed
+
+
+def test_power_zone_fills_fails_when_missing() -> None:
+    zones = [
+        {"net_name": "GND", "layer": "In1.Cu"},
+        {"net_name": "5V", "layer": "F.Cu"},
+    ]
+    result = check_power_zone_fills(zones)
+    assert not result.passed
+    assert "3V3" in result.detail or "1V8" in result.detail

@@ -362,6 +362,21 @@ def build_checklist(
         str(bom_file),
         check_msg="Impedance control",
     )
+    robust_skew_s, robust_skew_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="USB diff-pair length matching",
+    )
+    robust_tp_s, robust_tp_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Test-point coverage",
+    )
+    pcb_pwr_zone_s, pcb_pwr_zone_e = _script_status(
+        scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Power zone fills"
+    )
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
     gnd_s, gnd_e = _gnd_plane_status(pcb_file)
@@ -570,6 +585,27 @@ def build_checklist(
             "check_robustness.py impedance-controlled trace check",
             robust_imp_s,
             robust_imp_e,
+        ),
+        CheckItem(
+            "USB Diff-Pair Length Match",
+            "USB D+ / D- route lengths within 2.5 mm skew budget (IPC-2141A)",
+            "check_robustness.py diff-pair length matching check",
+            robust_skew_s,
+            robust_skew_e,
+        ),
+        CheckItem(
+            "Test-Point Coverage",
+            "Minimum test-point (TP*) footprints for in-circuit probeability (IPC-7711/7721)",
+            "check_robustness.py test-point coverage check",
+            robust_tp_s,
+            robust_tp_e,
+        ),
+        CheckItem(
+            "Power Zone Fills",
+            "Major power rails (5V, 3V3, 1V8) have copper pour zones for low-resistance distribution",
+            "check_pcb.py power zone fill scan",
+            pcb_pwr_zone_s,
+            pcb_pwr_zone_e,
         ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(

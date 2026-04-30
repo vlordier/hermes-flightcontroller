@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from scripts.check_mil_spice import (
+    _check_corner_sweep,
     _check_load_step,
     _check_pi_frequency,
     _check_startup_brownout,
+    _parse_meas_corner,
     _parse_meas_load_step,
     _parse_meas_pi,
     _parse_meas_startup_brownout,
@@ -139,3 +141,50 @@ def test_check_pi_frequency_flags_bad_values() -> None:
     assert len(results) == 2
     assert any(not r.passed and "impedance" in r.name.lower() for r in results)
     assert any(not r.passed and "psrr" in r.name.lower() for r in results)
+
+
+# ── Component tolerance corner sweep ─────────────────────────────────────────
+
+
+def test_parse_meas_corner_extracts_expected_keys() -> None:
+    text = """
+corner_vout_5v   = 4.98
+corner_ripple_5v = 0.045
+corner_vout_3v3  = 3.31
+corner_ripple_3v3 = 0.028
+corner_fb_5v     = 2.49
+irrelevant_key   = 99.9
+"""
+    parsed = _parse_meas_corner(text)
+    assert parsed["corner_vout_5v"] == 4.98
+    assert parsed["corner_ripple_5v"] == 0.045
+    assert parsed["corner_vout_3v3"] == 3.31
+    assert "irrelevant_key" not in parsed
+
+
+def test_check_corner_sweep_passes_for_nominal_outputs() -> None:
+    corner = {
+        "corner_vout_5v": 4.98,  # within ±5 %
+        "corner_ripple_5v": 0.04,  # 40 mV < 60 mV
+        "corner_vout_3v3": 3.31,  # within ±5 %
+        "corner_ripple_3v3": 0.025,  # 25 mV < 36 mV
+    }
+    results = _check_corner_sweep(corner)
+    assert results
+    assert all(r.passed for r in results)
+
+
+def test_check_corner_sweep_fails_on_out_of_tolerance_voltage() -> None:
+    corner = {"corner_vout_5v": 4.60}  # -8 % deviation > ±5 %
+    results = _check_corner_sweep(corner)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "deviation" in results[0].name.lower()
+
+
+def test_check_corner_sweep_fails_on_excessive_ripple() -> None:
+    corner = {"corner_ripple_3v3": 0.050}  # 50 mV > 36 mV
+    results = _check_corner_sweep(corner)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "ripple" in results[0].name.lower()

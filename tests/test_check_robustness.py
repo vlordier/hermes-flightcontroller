@@ -10,10 +10,12 @@ from scripts.check_robustness import (
     check_crystal_network,
     check_current_density,
     check_decoupling_proximity,
+    check_diff_pair_length_matching,
     check_impedance_controlled_traces,
     check_mechanical_vibration,
     check_power_ic_thermal_vias,
     check_power_track_robustness,
+    check_test_point_coverage,
 )
 
 
@@ -187,3 +189,61 @@ def test_impedance_warns_when_no_usb_nets() -> None:
     results = check_impedance_controlled_traces(tracks, net_map)
     assert len(results) == 1
     assert not results[0].passed
+
+
+# ── check_diff_pair_length_matching ──────────────────────────────────────────
+
+
+def test_diff_pair_length_matching_passes_within_skew() -> None:
+    # D+ = 3-4-5 right triangle → 5 mm; D- = 5.1 mm → skew 0.1 mm < 2.5 mm
+    tracks = [
+        Track(width_mm=0.17, net_id=1, start=(0.0, 0.0), end=(3.0, 4.0)),  # len=5 mm
+        Track(width_mm=0.17, net_id=2, start=(0.0, 0.0), end=(5.1, 0.0)),  # len=5.1 mm
+    ]
+    net_map = {1: "USB_DP", 2: "USB_DM"}
+    results = check_diff_pair_length_matching(tracks, net_map)
+    assert len(results) == 1
+    assert results[0].passed
+
+
+def test_diff_pair_length_matching_fails_on_large_skew() -> None:
+    # D+ = 10 mm; D- = 20 mm → skew 10 mm > 2.5 mm
+    tracks = [
+        Track(width_mm=0.17, net_id=1, start=(0.0, 0.0), end=(10.0, 0.0)),
+        Track(width_mm=0.17, net_id=2, start=(0.0, 0.0), end=(20.0, 0.0)),
+    ]
+    net_map = {1: "D+", 2: "D-"}
+    results = check_diff_pair_length_matching(tracks, net_map)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "skew" in results[0].detail.lower()
+
+
+def test_diff_pair_length_matching_warns_when_nets_missing() -> None:
+    tracks = [Track(width_mm=0.25, net_id=1)]
+    net_map = {1: "SPI_MOSI"}
+    results = check_diff_pair_length_matching(tracks, net_map)
+    assert not results[0].passed
+
+
+# ── check_test_point_coverage ─────────────────────────────────────────────────
+
+
+def test_test_point_coverage_passes_with_enough_tps() -> None:
+    fps = [
+        Footprint(ref="TP1", name="TestPoint", x_mm=1.0, y_mm=1.0, th_pads=1, smd_pads=0),
+        Footprint(ref="TP2", name="TestPoint", x_mm=2.0, y_mm=1.0, th_pads=1, smd_pads=0),
+        Footprint(ref="U1", name="IC_STM32", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=64),
+    ]
+    result = check_test_point_coverage(fps)
+    assert result.passed
+
+
+def test_test_point_coverage_fails_with_no_tps() -> None:
+    fps = [
+        Footprint(ref="U1", name="IC_STM32", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=64),
+        Footprint(ref="C1", name="C_0402", x_mm=12.0, y_mm=10.0, th_pads=0, smd_pads=2),
+    ]
+    result = check_test_point_coverage(fps)
+    assert not result.passed
+    assert "0" in result.detail

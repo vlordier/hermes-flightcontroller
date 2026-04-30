@@ -1,0 +1,67 @@
+* MIL Component Tolerance Corner Sweep
+*
+* Worst-case passive component variation per IPC-2221A / MIL-PRF-55110:
+*   Resistors:   +/-10 % (standard 5 % tolerance with aging)
+*   Capacitors:  +/-20 % (X7R/X5R Class II ceramic tolerance)
+*   Inductors:   +/-15 % (power inductor typical spec)
+*
+* CI parameterises RTOL / CTOL / LTOL and runs three corners:
+*   nom  : RTOL=1.00, CTOL=1.00, LTOL=1.00
+*   worst_hi : RTOL=1.10, CTOL=1.20, LTOL=1.15
+*   worst_lo : RTOL=0.90, CTOL=0.80, LTOL=0.85
+*
+* Measurements are consumed by scripts/check_mil_spice.py:
+*   corner_vout_5v   nominal/high/low output
+*   corner_ripple_5v peak-to-peak ripple deviation
+*   corner_vout_3v3  nominal/high/low output
+
+.param RTOL=1.00
+.param CTOL=1.00
+.param LTOL=1.00
+
+* ---- Power supply component definitions --------------------------------
+
+* Buck converter output filter (AP63203 application circuit)
+* L_out: 4.7 uH nominal
+* C_out: 22 uF + 10 uF ceramic
+L_out   5V_SW  5V      {4.7u * LTOL}
+C_out1  5V     0       {22u  * CTOL}
+C_out2  5V     0       {10u  * CTOL}
+R_load  5V     0       {5.0  / RTOL}      $ Nominal 1-A load at 5 V
+
+* LDO output filter (1.8 V)
+C_ldo1  1V8    0       {10u  * CTOL}
+C_ldo2  1V8    0       {100n * CTOL}
+R_ldo   1V8    0       {18.0 / RTOL}
+
+* Buck feedback divider (sets output voltage)
+R_fb1   5V     FB_5V   {100k * RTOL}
+R_fb2   FB_5V  0       {100k * RTOL}
+
+* Decoupling caps on 3.3 V digital rail
+C_3v3   3V3    0       {10u  * CTOL}
+C_3v3b  3V3    0       {100n * CTOL}
+
+* ---- Stimulus ----------------------------------------------------------
+
+Vin VBUS 0 DC 5.0 AC 0
+Vsw 5V_SW VBUS DC 0 PULSE(0 5 1u 50n 50n 5u 10u)
+
+.tran 100n 200u
+
+* ---- Measurements ------------------------------------------------------
+
+* DC operating point per rail
+.meas tran corner_vout_5v   avg  v(5V)   from=150u to=200u
+.meas tran corner_vout_3v3  avg  v(3V3)  from=150u to=200u
+.meas tran corner_vout_1v8  avg  v(1V8)  from=150u to=200u
+
+* Peak-to-peak ripple (settled region)
+.meas tran corner_ripple_5v   pp   v(5V)   from=150u to=200u
+.meas tran corner_ripple_3v3  pp   v(3V3)  from=150u to=200u
+.meas tran corner_ripple_1v8  pp   v(1V8)  from=150u to=200u
+
+* Feedback node deviation (indicates resistor-divider accuracy)
+.meas tran corner_fb_5v  avg  v(FB_5V)  from=150u to=200u
+
+.end
