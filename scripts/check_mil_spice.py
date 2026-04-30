@@ -93,6 +93,20 @@ BROWNOUT_RECOVERY_TARGET_US: dict[str, float] = {
     "1v8": 600.0,
 }
 
+# ── Frequency-domain PI robustness targets ──────────────────────────────────
+# Impedance targets are in milliohms and represent practical rail goals.
+PI_ZOUT_TARGET_MOHM: dict[str, float] = {
+    "5v": 120.0,
+    "3v3": 80.0,
+    "1v8": 60.0,
+}
+# PSRR proxy targets in dB across frequency bands.
+PI_PSRR_TARGET_DB: dict[str, float] = {
+    "5v": 20.0,
+    "3v3": 25.0,
+    "1v8": 30.0,
+}
+
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
@@ -156,6 +170,19 @@ def _parse_meas_startup_brownout(text: str) -> dict[str, float]:
         k: v
         for k, v in results.items()
         if k.startswith("su_rise_") or k.startswith("bo_dip_") or k.startswith("bo_recover_")
+    }
+
+
+def _parse_meas_pi(text: str) -> dict[str, float]:
+    """Extract PI frequency-domain metrics from .meas outputs.
+
+    Convention:
+        - pi_zout_<rail>_<band> : output impedance in ohms
+        - pi_psrr_<rail>_<band> : PSRR proxy in dB
+    """
+    results = _parse_measurements(text)
+    return {
+        k: v for k, v in results.items() if k.startswith("pi_zout_") or k.startswith("pi_psrr_")
     }
 
 
@@ -381,6 +408,55 @@ def _check_startup_brownout(startup_brownout: dict[str, float]) -> list[CheckRes
     return results
 
 
+def _check_pi_frequency(pi_metrics: dict[str, float]) -> list[CheckResult]:
+    """Validate frequency-domain PI metrics (impedance + PSRR proxies)."""
+    results: list[CheckResult] = []
+
+    for key, value in pi_metrics.items():
+        if key.startswith("pi_zout_"):
+            # key: pi_zout_<rail>_<band>
+            parts = key.split("_")
+            if len(parts) < 4:
+                continue
+            rail = parts[2]
+            band = "_".join(parts[3:])
+            if rail not in PI_ZOUT_TARGET_MOHM:
+                continue
+            zout_mohm = value * 1000.0
+            target_mohm = PI_ZOUT_TARGET_MOHM[rail]
+            ok = zout_mohm <= target_mohm
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} PI impedance ({band})",
+                    passed=ok,
+                    detail=f"{zout_mohm:.1f} mOhm  [target <= {target_mohm:.1f} mOhm]",
+                )
+            )
+            continue
+
+        if key.startswith("pi_psrr_"):
+            # key: pi_psrr_<rail>_<band>
+            parts = key.split("_")
+            if len(parts) < 4:
+                continue
+            rail = parts[2]
+            band = "_".join(parts[3:])
+            if rail not in PI_PSRR_TARGET_DB:
+                continue
+            psrr_db = value
+            target_db = PI_PSRR_TARGET_DB[rail]
+            ok = psrr_db >= target_db
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} PI PSRR ({band})",
+                    passed=ok,
+                    detail=f"{psrr_db:.1f} dB  [target >= {target_db:.1f} dB]",
+                )
+            )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -405,6 +481,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     transients = _parse_meas_transient(text)
     load_step = _parse_meas_load_step(text)
     startup_brownout = _parse_meas_startup_brownout(text)
+    pi_metrics = _parse_meas_pi(text)
 
     if not measurements:
         print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
@@ -416,6 +493,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     all_results += _check_transients(measurements, transients)
     all_results += _check_load_step(load_step)
     all_results += _check_startup_brownout(startup_brownout)
+    all_results += _check_pi_frequency(pi_metrics)
 
     if not all_results:
         print(f"[MIL-SPICE:{label}] No matching rail measurements found.")

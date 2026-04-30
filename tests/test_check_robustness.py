@@ -6,6 +6,7 @@ from scripts.check_robustness import (
     Footprint,
     Track,
     Via,
+    check_connector_anchoring,
     check_crystal_network,
     check_mechanical_vibration,
     check_power_ic_thermal_vias,
@@ -28,7 +29,7 @@ def test_power_track_robustness_fails_when_too_narrow() -> None:
 
 
 def test_power_ic_thermal_vias_detects_insufficient_vias() -> None:
-    footprints = [Footprint(ref="U2", name="Reg", x_mm=10.0, y_mm=10.0)]
+    footprints = [Footprint(ref="U2", name="Reg", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=6)]
     vias = [Via(x_mm=10.5, y_mm=10.5)]
     bom = {"U2": "AP63203WU"}
     result = check_power_ic_thermal_vias(footprints, vias, bom)
@@ -37,19 +38,72 @@ def test_power_ic_thermal_vias_detects_insufficient_vias() -> None:
 
 def test_crystal_network_passes_when_present() -> None:
     bom = {"Y1": "16Mhz", "C11": "10p", "C12": "10p"}
-    fps = [Footprint(ref="Y1", name="Crystal", x_mm=0.0, y_mm=0.0)]
+    fps = [Footprint(ref="Y1", name="Crystal", x_mm=0.0, y_mm=0.0, th_pads=0, smd_pads=4)]
     vias = [Via(x_mm=1.0, y_mm=1.0), Via(x_mm=2.0, y_mm=0.5)]
     results = check_crystal_network(bom, fps, vias)
     assert all(r.passed for r in results)
 
 
+def test_connector_anchoring_passes_with_through_hole_connector() -> None:
+    fps = [
+        Footprint(ref="J1", name="Connector_USB", x_mm=5.0, y_mm=5.0, th_pads=4, smd_pads=4),
+    ]
+    result = check_connector_anchoring(fps, vias=[])
+    assert result.passed
+
+
+def test_connector_anchoring_fails_without_th_or_local_vias() -> None:
+    fps = [
+        Footprint(
+            ref="J2", name="Connector_PinHeader", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=6
+        ),
+    ]
+    result = check_connector_anchoring(fps, vias=[])
+    assert not result.passed
+
+
 def test_mechanical_vibration_checks_mounting_and_margin() -> None:
     fps = [
-        Footprint(ref="MH1", name="MountingHole:MountingHole_4.3mm", x_mm=2.0, y_mm=2.0),
-        Footprint(ref="MH2", name="MountingHole:MountingHole_4.3mm", x_mm=98.0, y_mm=2.0),
-        Footprint(ref="MH3", name="MountingHole:MountingHole_4.3mm", x_mm=2.0, y_mm=48.0),
-        Footprint(ref="MH4", name="MountingHole:MountingHole_4.3mm", x_mm=98.0, y_mm=48.0),
-        Footprint(ref="L1", name="Inductor_SMD:L_0805_2012Metric", x_mm=10.0, y_mm=10.0),
+        Footprint(
+            ref="MH1",
+            name="MountingHole:MountingHole_4.3mm",
+            x_mm=2.0,
+            y_mm=2.0,
+            th_pads=1,
+            smd_pads=0,
+        ),
+        Footprint(
+            ref="MH2",
+            name="MountingHole:MountingHole_4.3mm",
+            x_mm=98.0,
+            y_mm=2.0,
+            th_pads=1,
+            smd_pads=0,
+        ),
+        Footprint(
+            ref="MH3",
+            name="MountingHole:MountingHole_4.3mm",
+            x_mm=2.0,
+            y_mm=48.0,
+            th_pads=1,
+            smd_pads=0,
+        ),
+        Footprint(
+            ref="MH4",
+            name="MountingHole:MountingHole_4.3mm",
+            x_mm=98.0,
+            y_mm=48.0,
+            th_pads=1,
+            smd_pads=0,
+        ),
+        Footprint(
+            ref="L1",
+            name="Inductor_SMD:L_0805_2012Metric",
+            x_mm=10.0,
+            y_mm=10.0,
+            th_pads=0,
+            smd_pads=2,
+        ),
     ]
     results = check_mechanical_vibration(fps, (0.0, 0.0, 100.0, 50.0))
     assert results[0].passed

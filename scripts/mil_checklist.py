@@ -181,7 +181,16 @@ def _parse_spice_margin_items(reports_dir: Path) -> list[CheckItem]:
         # Include only margin-bearing checks in the report expansion.
         if not any(
             token in name.lower()
-            for token in ("dc", "ripple", "transient", "load-step", "startup", "brownout")
+            for token in (
+                "dc",
+                "ripple",
+                "transient",
+                "load-step",
+                "startup",
+                "brownout",
+                "impedance",
+                "psrr",
+            )
         ):
             continue
 
@@ -328,6 +337,12 @@ def build_checklist(
         str(pcb_file),
         str(bom_file),
         check_msg="Mechanical mounting points",
+    )
+    robust_conn_s, robust_conn_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Connector anchoring",
     )
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
@@ -510,6 +525,13 @@ def build_checklist(
             robust_mech_s,
             robust_mech_e,
         ),
+        CheckItem(
+            "Connector Mechanical Anchoring",
+            "Connectors include through-hole anchors or local via reinforcement",
+            "check_robustness.py connector anchoring check",
+            robust_conn_s,
+            robust_conn_e,
+        ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(
             "Component LCSC Coverage",
@@ -579,6 +601,65 @@ _STATUS_ICON = {
 }
 
 
+class MarginRow(NamedTuple):
+    metric: str
+    case: str
+    margin: float
+    unit: str
+    ok: bool
+
+
+def _extract_margin(evidence: str) -> tuple[float, str] | None:
+    """Extract signed margin from evidence text.
+
+    Positive margin means extra headroom; negative means threshold violation.
+    Supports patterns:
+      - "X unit [target <= Y unit]" => margin = Y - X
+      - "X unit [target >= Y unit]" => margin = X - Y
+    """
+    actual = re.search(r"([-+]?[0-9]*\.?[0-9]+)\s*([A-Za-z%]+)", evidence)
+    target = re.search(r"target\s*(<=|>=)\s*([-+]?[0-9]*\.?[0-9]+)\s*([A-Za-z%]+)", evidence)
+    if not actual or not target:
+        return None
+
+    actual_val = float(actual.group(1))
+    actual_unit = actual.group(2)
+    comp = target.group(1)
+    target_val = float(target.group(2))
+    target_unit = target.group(3)
+    if actual_unit != target_unit:
+        return None
+
+    if comp == "<=":
+        return target_val - actual_val, actual_unit
+    return actual_val - target_val, actual_unit
+
+
+def _spice_margin_rollup(items: list[CheckItem]) -> list[MarginRow]:
+    """Return worst-case margin row per SPICE metric across all sweep cases."""
+    rows: list[MarginRow] = []
+    by_metric: dict[str, MarginRow] = {}
+
+    for item in items:
+        if not item.section.startswith("SPICE Margin / "):
+            continue
+        parsed = _extract_margin(item.evidence)
+        if parsed is None:
+            continue
+        margin, unit = parsed
+        case = item.section.removeprefix("SPICE Margin / ")
+        metric = item.requirement.removesuffix(" within configured robustness margin")
+        ok = item.status == "PASS"
+
+        row = MarginRow(metric=metric, case=case, margin=margin, unit=unit, ok=ok)
+        current = by_metric.get(metric)
+        if current is None or row.margin < current.margin:
+            by_metric[metric] = row
+
+    rows.extend(sorted(by_metric.values(), key=lambda r: r.margin))
+    return rows
+
+
 def render_markdown(items: list[CheckItem]) -> str:
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
     pass_cnt = sum(1 for i in items if i.status == "PASS")
@@ -602,6 +683,22 @@ def render_markdown(items: list[CheckItem]) -> str:
         f"| **Total**  | **{len(items)}** |",
         "",
     ]
+
+    rollup = _spice_margin_rollup(items)
+    if rollup:
+        lines += [
+            "## Worst-Case SPICE Margins",
+            "",
+            "| Metric | Worst Case | Margin | Status |",
+            "|--------|------------|--------|--------|",
+        ]
+        for row in rollup:
+            status = "PASS" if row.ok and row.margin >= 0 else "FAIL"
+            sign = "+" if row.margin >= 0 else ""
+            lines.append(
+                f"| {row.metric} | {row.case} | {sign}{row.margin:.2f} {row.unit} | {status} |"
+            )
+        lines.append("")
 
     if fail_cnt > 0:
         lines += ["## Failures (must be resolved before release)", ""]

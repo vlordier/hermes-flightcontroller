@@ -1,0 +1,39 @@
+* MIL PI Sweep Template (impedance + PSRR proxy)
+*
+* CI concatenates this template with exported netlist, then runs ngspice.
+* Measurements are consumed by scripts/check_mil_spice.py:
+*   pi_zout_<rail>_<band> in ohms
+*   pi_psrr_<rail>_<band> in dB
+
+.param PI_INJECT_I=0.05
+.param PI_VIN_RIPPLE=0.05
+
+* Small-signal current injections for output impedance proxy.
+Iinj_5v 5V 0 AC {PI_INJECT_I}
+Iinj_3v3 3V3 0 AC {0.6*PI_INJECT_I}
+Iinj_1v8 1V8 0 AC {0.4*PI_INJECT_I}
+
+* Input ripple source for PSRR proxy.
+Vin_ac VBUS_SRC 0 AC {PI_VIN_RIPPLE}
+
+.ac dec 40 1k 50Meg
+
+* Impedance proxies |Vout/Iinj| at representative bands.
+.meas ac pi_zout_5v_lf find mag(v(5v))/PI_INJECT_I at=10k
+.meas ac pi_zout_5v_mf find mag(v(5v))/PI_INJECT_I at=1Meg
+.meas ac pi_zout_5v_hf find mag(v(5v))/PI_INJECT_I at=10Meg
+
+.meas ac pi_zout_3v3_lf find mag(v(3v3))/(0.6*PI_INJECT_I) at=10k
+.meas ac pi_zout_3v3_mf find mag(v(3v3))/(0.6*PI_INJECT_I) at=1Meg
+.meas ac pi_zout_3v3_hf find mag(v(3v3))/(0.6*PI_INJECT_I) at=10Meg
+
+.meas ac pi_zout_1v8_lf find mag(v(1v8))/(0.4*PI_INJECT_I) at=10k
+.meas ac pi_zout_1v8_mf find mag(v(1v8))/(0.4*PI_INJECT_I) at=1Meg
+.meas ac pi_zout_1v8_hf find mag(v(1v8))/(0.4*PI_INJECT_I) at=10Meg
+
+* PSRR proxy in dB = 20*log10(Vin_ripple / Vout_ripple).
+.meas ac pi_psrr_5v_lf param='20*log10(PI_VIN_RIPPLE/mag(v(5v)))'
+.meas ac pi_psrr_3v3_lf param='20*log10(PI_VIN_RIPPLE/mag(v(3v3)))'
+.meas ac pi_psrr_1v8_lf param='20*log10(PI_VIN_RIPPLE/mag(v(1v8)))'
+
+.end

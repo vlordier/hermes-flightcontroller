@@ -213,6 +213,34 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run PI frequency-domain sweeps
+        # AC-based output impedance and PSRR proxy measurements.
+        run: |
+          if [ -f sim.net ] && [ -f PCB/sim/mil_pi_sweep.cir ]; then
+            cases=(
+              "nominal 0.05 0.05"
+              "stressed 0.08 0.08"
+            )
+
+            for case in "${cases[@]}"; do
+              set -- $case
+              tag="$1"
+              inj="$2"
+              vin="$3"
+
+              sed -E \
+                -e "s/^\.param PI_INJECT_I=.*/.param PI_INJECT_I=${inj}/" \
+                -e "s/^\.param PI_VIN_RIPPLE=.*/.param PI_VIN_RIPPLE=${vin}/" \
+                PCB/sim/mil_pi_sweep.cir > "mil_pi_sweep_${tag}.cir"
+
+              cat "mil_pi_sweep_${tag}.cir" sim.net > "mil_sim_pi_${tag}.cir"
+              ngspice -b -o "sim_output_pi_${tag}.txt" "mil_sim_pi_${tag}.cir" || true
+            done
+          else
+            echo "No netlist or PI template — skipping PI sweeps." | tee sim_output_pi_skip.txt
+          fi
+        continue-on-error: true
+
       - name: Check MIL SPICE results across sweep cases
         run: |
           set -o pipefail
@@ -234,6 +262,8 @@ jobs:
             mil_load_step_*.cir
             mil_sim_startup_*.cir
             mil_startup_brownout_*.cir
+            mil_sim_pi_*.cir
+            mil_pi_sweep_*.cir
 
   # ── 4. OpenEMS FDTD EM simulation (RE102 / RS103 approximation) ──────────
   em-simulation:

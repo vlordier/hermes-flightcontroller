@@ -28,6 +28,8 @@ class Footprint:
     name: str
     x_mm: float
     y_mm: float
+    th_pads: int
+    smd_pads: int
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class CheckResult(BaseModel):
 
 POWER_VALUE_RE = re.compile(r"buck|ldo|regulator|ap\d|ld\d", re.IGNORECASE)
 HEAVY_PART_RE = re.compile(r"mounting|usb|switch|inductor|l_\d|electrolytic", re.IGNORECASE)
+CONNECTOR_RE = re.compile(r"usb|conn|header|jst|socket|terminal", re.IGNORECASE)
 
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -112,6 +115,8 @@ def _parse_board(  # noqa: C901
             at_x = 0.0
             at_y = 0.0
             ref = ""
+            th_pads = 0
+            smd_pads = 0
             for prop in item:
                 if not isinstance(prop, list):
                     continue
@@ -130,7 +135,22 @@ def _parse_board(  # noqa: C901
                     and str(prop[1]) == "Reference"
                 ):
                     ref = str(prop[2])
-            footprints.append(Footprint(ref=ref, name=fp_name, x_mm=at_x, y_mm=at_y))
+                if prop[0] == sexpdata.Symbol("pad") and len(prop) >= 3:
+                    pad_type = str(prop[2]).lower()
+                    if "thru_hole" in pad_type:
+                        th_pads += 1
+                    elif "smd" in pad_type:
+                        smd_pads += 1
+            footprints.append(
+                Footprint(
+                    ref=ref,
+                    name=fp_name,
+                    x_mm=at_x,
+                    y_mm=at_y,
+                    th_pads=th_pads,
+                    smd_pads=smd_pads,
+                )
+            )
             continue
 
         if sym == sexpdata.Symbol("via"):
@@ -338,6 +358,38 @@ def check_mechanical_vibration(
     return results
 
 
+def check_connector_anchoring(footprints: list[Footprint], vias: list[Via]) -> CheckResult:
+    """Verify connectors have adequate mechanical anchoring features."""
+    connectors = [fp for fp in footprints if CONNECTOR_RE.search(fp.name)]
+    if not connectors:
+        return CheckResult(
+            name="Connector anchoring",
+            passed=False,
+            detail="No connector footprints matched for anchoring check",
+        )
+
+    weak: list[str] = []
+    for fp in connectors:
+        near_vias = sum(1 for v in vias if _distance((fp.x_mm, fp.y_mm), (v.x_mm, v.y_mm)) <= 3.0)
+        anchored = fp.th_pads >= 2 or near_vias >= 2
+        if not anchored:
+            label = fp.ref or fp.name
+            weak.append(f"{label} (TH={fp.th_pads}, near_vias={near_vias})")
+
+    if weak:
+        return CheckResult(
+            name="Connector anchoring",
+            passed=False,
+            detail=f"{len(weak)} connector(s) weakly anchored: {', '.join(weak[:5])}",
+        )
+
+    return CheckResult(
+        name="Connector anchoring",
+        passed=True,
+        detail=f"All {len(connectors)} connector footprint(s) have TH pads or via anchors",
+    )
+
+
 def main(pcb_file: str, bom_file: str) -> int:
     pcb_path = Path(pcb_file)
     bom_path = Path(bom_file)
@@ -356,6 +408,7 @@ def main(pcb_file: str, bom_file: str) -> int:
     results.append(check_power_track_robustness(tracks, net_map))
     results.append(check_power_ic_thermal_vias(footprints, vias, bom_values))
     results += check_crystal_network(bom_values, footprints, vias)
+    results.append(check_connector_anchoring(footprints, vias))
     results += check_mechanical_vibration(footprints, bbox)
 
     print(f"[ROBUSTNESS] Results for {pcb_path.name} + {bom_path.name}:")

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from scripts.check_mil_spice import (
     _check_load_step,
+    _check_pi_frequency,
     _check_startup_brownout,
     _parse_meas_load_step,
+    _parse_meas_pi,
     _parse_meas_startup_brownout,
 )
 
@@ -100,3 +102,40 @@ def test_check_startup_brownout_fails_on_large_brownout_dip() -> None:
     assert len(results) == 1
     assert not results[0].passed
     assert "brownout" in results[0].name.lower()
+
+
+def test_parse_meas_pi_extracts_expected_keys() -> None:
+    text = """
+pi_zout_5v_lf = 9.0e-2
+pi_psrr_5v_lf = 26.5
+pi_zout_3v3_hf = 7.5e-2
+noise_metric = 1.0
+"""
+    parsed = _parse_meas_pi(text)
+    assert parsed["pi_zout_5v_lf"] == 9.0e-2
+    assert parsed["pi_psrr_5v_lf"] == 26.5
+    assert parsed["pi_zout_3v3_hf"] == 7.5e-2
+    assert "noise_metric" not in parsed
+
+
+def test_check_pi_frequency_passes_for_good_values() -> None:
+    pi = {
+        "pi_zout_5v_lf": 0.10,  # 100 mOhm <= 120 mOhm
+        "pi_psrr_5v_lf": 24.0,  # >= 20 dB
+        "pi_zout_3v3_hf": 0.06,  # 60 mOhm <= 80 mOhm
+        "pi_psrr_3v3_hf": 28.0,  # >= 25 dB
+    }
+    results = _check_pi_frequency(pi)
+    assert results
+    assert all(r.passed for r in results)
+
+
+def test_check_pi_frequency_flags_bad_values() -> None:
+    pi = {
+        "pi_zout_5v_lf": 0.20,  # 200 mOhm > 120 mOhm
+        "pi_psrr_1v8_hf": 24.0,  # < 30 dB
+    }
+    results = _check_pi_frequency(pi)
+    assert len(results) == 2
+    assert any(not r.passed and "impedance" in r.name.lower() for r in results)
+    assert any(not r.passed and "psrr" in r.name.lower() for r in results)
