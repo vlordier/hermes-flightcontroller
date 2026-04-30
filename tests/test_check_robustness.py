@@ -8,6 +8,9 @@ from scripts.check_robustness import (
     Via,
     check_connector_anchoring,
     check_crystal_network,
+    check_current_density,
+    check_decoupling_proximity,
+    check_impedance_controlled_traces,
     check_mechanical_vibration,
     check_power_ic_thermal_vias,
     check_power_track_robustness,
@@ -108,3 +111,79 @@ def test_mechanical_vibration_checks_mounting_and_margin() -> None:
     results = check_mechanical_vibration(fps, (0.0, 0.0, 100.0, 50.0))
     assert results[0].passed
     assert results[1].passed
+
+
+# ── check_current_density ─────────────────────────────────────────────────────
+
+
+def test_current_density_passes_when_wide_enough() -> None:
+    tracks = [Track(width_mm=1.1, net_id=1), Track(width_mm=0.9, net_id=2)]
+    net_map = {1: "VBUS", 2: "5V"}
+    results = check_current_density(tracks, net_map)
+    assert all(r.passed for r in results)
+
+
+def test_current_density_fails_vbus_too_narrow() -> None:
+    tracks = [Track(width_mm=0.5, net_id=1)]
+    net_map = {1: "VBUS"}
+    results = check_current_density(tracks, net_map)
+    vbus_result = next(r for r in results if "VBUS" in r.name)
+    assert not vbus_result.passed
+
+
+def test_current_density_skips_absent_nets() -> None:
+    # 3V3 net not on board → no result for it
+    tracks = [Track(width_mm=1.2, net_id=1)]
+    net_map = {1: "VBUS"}
+    results = check_current_density(tracks, net_map)
+    names = [r.name for r in results]
+    assert not any("3V3" in n for n in names)
+
+
+# ── check_decoupling_proximity ────────────────────────────────────────────────
+
+
+def test_decoupling_proximity_passes_when_cap_nearby() -> None:
+    fps = [
+        Footprint(ref="U1", name="IC_STM32", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=64),
+        Footprint(ref="C1", name="C_0402", x_mm=12.0, y_mm=10.5, th_pads=0, smd_pads=2),
+    ]
+    bom = {"U1": "STM32F405", "C1": "100nF"}
+    results = check_decoupling_proximity(fps, bom)
+    assert all(r.passed for r in results)
+
+
+def test_decoupling_proximity_fails_no_nearby_cap() -> None:
+    fps = [
+        Footprint(ref="U1", name="IC_STM32", x_mm=10.0, y_mm=10.0, th_pads=0, smd_pads=64),
+        Footprint(ref="C1", name="C_0402", x_mm=50.0, y_mm=50.0, th_pads=0, smd_pads=2),
+    ]
+    bom = {"U1": "STM32F405", "C1": "100nF"}
+    results = check_decoupling_proximity(fps, bom)
+    u1_result = next(r for r in results if "U1" in r.name)
+    assert not u1_result.passed
+
+
+# ── check_impedance_controlled_traces ─────────────────────────────────────────
+
+
+def test_impedance_passes_for_correctly_sized_usb_tracks() -> None:
+    tracks = [Track(width_mm=0.17, net_id=1), Track(width_mm=0.17, net_id=2)]
+    net_map = {1: "USB_DP", 2: "USB_DM"}
+    results = check_impedance_controlled_traces(tracks, net_map)
+    assert all(r.passed for r in results)
+
+
+def test_impedance_fails_for_oversized_usb_tracks() -> None:
+    tracks = [Track(width_mm=0.8, net_id=1), Track(width_mm=0.8, net_id=2)]
+    net_map = {1: "D+", 2: "D-"}
+    results = check_impedance_controlled_traces(tracks, net_map)
+    assert any(not r.passed for r in results)
+
+
+def test_impedance_warns_when_no_usb_nets() -> None:
+    tracks = [Track(width_mm=0.25, net_id=1)]
+    net_map = {1: "SPI_MOSI"}
+    results = check_impedance_controlled_traces(tracks, net_map)
+    assert len(results) == 1
+    assert not results[0].passed

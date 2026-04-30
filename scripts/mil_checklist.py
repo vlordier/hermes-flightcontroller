@@ -344,6 +344,24 @@ def build_checklist(
         str(bom_file),
         check_msg="Connector anchoring",
     )
+    robust_cur_s, robust_cur_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Current density",
+    )
+    robust_dec_s, robust_dec_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Decoupling proximity",
+    )
+    robust_imp_s, robust_imp_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Impedance control",
+    )
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
     gnd_s, gnd_e = _gnd_plane_status(pcb_file)
@@ -531,6 +549,27 @@ def build_checklist(
             "check_robustness.py connector anchoring check",
             robust_conn_s,
             robust_conn_e,
+        ),
+        CheckItem(
+            "IPC-2221A Current Density",
+            "All power net tracks meet IPC-2221A minimum width for rated current (≤10 °C rise)",
+            "check_robustness.py current-density check (VBUS/5V/3V3/BAT/RAW)",
+            robust_cur_s,
+            robust_cur_e,
+        ),
+        CheckItem(
+            "Decoupling Capacitor Proximity",
+            "Each IC has at least one bypass capacitor within 5 mm",
+            "check_robustness.py decoupling proximity check",
+            robust_dec_s,
+            robust_dec_e,
+        ),
+        CheckItem(
+            "USB Impedance Control",
+            "USB D+/D- differential pair tracks within 90 Ω target window (0.10–0.30 mm)",
+            "check_robustness.py impedance-controlled trace check",
+            robust_imp_s,
+            robust_imp_e,
         ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(

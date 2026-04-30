@@ -58,6 +58,37 @@ POWER_VALUE_RE = re.compile(r"buck|ldo|regulator|ap\d|ld\d", re.IGNORECASE)
 HEAVY_PART_RE = re.compile(r"mounting|usb|switch|inductor|l_\d|electrolytic", re.IGNORECASE)
 CONNECTOR_RE = re.compile(r"usb|conn|header|jst|socket|terminal", re.IGNORECASE)
 
+# Per-net current budgets for current-density checks (net keyword → amps).
+# Based on worst-case MCU + sensor loads at each rail.
+NET_CURRENT_BUDGET_A: dict[str, float] = {
+    "VBUS": 2.0,  # USB upstream VBUS; buck input up to 2 A
+    "5V": 1.5,  # AP63203 output feeds MCU + sensors at up to 1.5 A
+    "3V3": 1.0,  # 3.3 V digital rail; STM32 + IMU + other peripherals
+    "BAT": 2.0,  # Battery input; same headroom as VBUS
+    "RAW": 2.0,  # Unregulated input; full input current
+}
+
+# Minimum track width (mm) required to carry the rated current at ≤10 °C rise
+# on an external copper layer (1 oz / 35 µm).  Values derived from IPC-2221A
+# external-conductor chart: I = 0.048 · ΔT^0.44 · W^0.725  (W in mm).
+NET_MIN_WIDTH_FOR_CURRENT_MM: dict[str, float] = {
+    "VBUS": 1.0,
+    "5V": 0.8,
+    "3V3": 0.5,
+    "BAT": 1.0,
+    "RAW": 1.0,
+}
+
+# USB high-speed impedance-controlled differential pair net-name keywords.
+USB_DP_KEYWORDS = ("D+", "DP", "USB_DP", "USBDP", "USB+")
+USB_DM_KEYWORDS = ("D-", "DM", "USB_DM", "USBDM", "USB-")
+
+# Target width range for 90 Ω USB differential pair on standard 4-layer FR4
+# (1.6 mm, 1 oz copper, internal reference plane).  Typical design target:
+# ~0.17 mm ± 30 % manufacturing tolerance.
+USB_DIFF_WIDTH_MIN_MM = 0.10
+USB_DIFF_WIDTH_MAX_MM = 0.30
+
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
@@ -390,6 +421,156 @@ def check_connector_anchoring(footprints: list[Footprint], vias: list[Via]) -> C
     )
 
 
+def check_current_density(tracks: list[Track], net_map: dict[int, str]) -> list[CheckResult]:
+    """Check that power net tracks are wide enough for their rated current.
+
+    Uses IPC-2221A external-conductor current capacity as a gate:
+    minimum track widths are pre-computed for ≤10 °C temperature rise at the
+    rated current for each power net.
+    """
+    results: list[CheckResult] = []
+    for net_key, required_width in NET_MIN_WIDTH_FOR_CURRENT_MM.items():
+        rated_a = NET_CURRENT_BUDGET_A.get(net_key, 1.0)
+        net_tracks = [t for t in tracks if net_key.upper() in net_map.get(t.net_id, "").upper()]
+        if not net_tracks:
+            # Net not present on this board — skip rather than flagging.
+            continue
+        min_w = min(t.width_mm for t in net_tracks)
+        passed = min_w >= required_width
+        results.append(
+            CheckResult(
+                name=f"Current density — {net_key}",
+                passed=passed,
+                detail=(
+                    f"Min track width {min_w:.3f} mm >= {required_width:.3f} mm "
+                    f"(IPC-2221A, {rated_a:.1f} A, ≤10 °C rise)"
+                    if passed
+                    else f"Min track width {min_w:.3f} mm < {required_width:.3f} mm "
+                    f"(IPC-2221A, {rated_a:.1f} A, ≤10 °C rise) — widen track"
+                ),
+            )
+        )
+    if not results:
+        results.append(
+            CheckResult(
+                name="Current density",
+                passed=False,
+                detail="No power net tracks found for current-density check",
+            )
+        )
+    return results
+
+
+def check_decoupling_proximity(
+    footprints: list[Footprint],
+    bom_values: dict[str, str],
+    *,
+    radius_mm: float = 5.0,
+) -> list[CheckResult]:
+    """Verify each IC has at least one bypass capacitor within *radius_mm*.
+
+    ICs are footprints whose reference starts with 'U'.  Capacitors are
+    footprints whose reference starts with 'C' and whose BOM value contains a
+    capacitance unit (n/µ/p followed by F, or plain numeric pF/nF/µF).
+    """
+    ic_fps = [fp for fp in footprints if fp.ref.upper().startswith("U")]
+    cap_fps = [
+        fp
+        for fp in footprints
+        if fp.ref.upper().startswith("C")
+        and re.search(r"\d+\s*[nupµ]?[fF]", bom_values.get(fp.ref, ""))
+    ]
+
+    if not ic_fps:
+        return [
+            CheckResult(
+                name="Decoupling proximity",
+                passed=False,
+                detail="No IC footprints (U*) found for decoupling check",
+            )
+        ]
+
+    results: list[CheckResult] = []
+    for ic in ic_fps:
+        nearby_caps = [
+            c for c in cap_fps if _distance((ic.x_mm, ic.y_mm), (c.x_mm, c.y_mm)) <= radius_mm
+        ]
+        results.append(
+            CheckResult(
+                name=f"Decoupling proximity — {ic.ref}",
+                passed=len(nearby_caps) >= 1,
+                detail=(
+                    f"{len(nearby_caps)} bypass cap(s) within {radius_mm:.0f} mm"
+                    if nearby_caps
+                    else f"No bypass capacitor within {radius_mm:.0f} mm — add local decoupling"
+                ),
+            )
+        )
+    return results
+
+
+def check_impedance_controlled_traces(
+    tracks: list[Track], net_map: dict[int, str]
+) -> list[CheckResult]:
+    """Check USB D+/D- differential pair tracks for controlled-impedance width.
+
+    USB 2.0 full-speed / high-speed differential pairs target 90 Ω.  On a
+    standard 4-layer FR4 board (1.6 mm, 1 oz copper, internal reference plane)
+    this corresponds to roughly 0.17 mm single-ended width.  The checker flags
+    tracks outside the tolerance window USB_DIFF_WIDTH_MIN_MM–USB_DIFF_WIDTH_MAX_MM.
+    """
+    results: list[CheckResult] = []
+
+    def _check_pair(keywords: tuple[str, ...], label: str) -> None:
+        pair_tracks = [
+            t
+            for t in tracks
+            if any(kw.upper() in net_map.get(t.net_id, "").upper() for kw in keywords)
+        ]
+        if not pair_tracks:
+            return  # net not present; skip rather than raising
+        violations = [
+            t
+            for t in pair_tracks
+            if not (USB_DIFF_WIDTH_MIN_MM <= t.width_mm <= USB_DIFF_WIDTH_MAX_MM)
+        ]
+        passed = not violations
+        if passed:
+            widths = [t.width_mm for t in pair_tracks]
+            detail = (
+                f"All {len(pair_tracks)} segment(s) within "
+                f"{USB_DIFF_WIDTH_MIN_MM:.2f}–{USB_DIFF_WIDTH_MAX_MM:.2f} mm "
+                f"(90 Ω diff target); min={min(widths):.3f} mm"
+            )
+        else:
+            bad_widths = sorted({t.width_mm for t in violations})
+            detail = (
+                f"{len(violations)} segment(s) outside 90 Ω target window "
+                f"[{USB_DIFF_WIDTH_MIN_MM:.2f}–{USB_DIFF_WIDTH_MAX_MM:.2f} mm]: "
+                f"{', '.join(f'{w:.3f}' for w in bad_widths[:5])}"
+            )
+        results.append(
+            CheckResult(
+                name=f"Impedance control — USB {label}",
+                passed=passed,
+                detail=detail,
+            )
+        )
+
+    _check_pair(USB_DP_KEYWORDS, "D+")
+    _check_pair(USB_DM_KEYWORDS, "D-")
+
+    if not results:
+        results.append(
+            CheckResult(
+                name="Impedance control — USB differential pair",
+                passed=False,
+                detail="No USB D+/D- nets found — check net naming (expected D+/D-, DP/DM, USB_DP/USB_DM)",
+            )
+        )
+    return results
+
+
 def main(pcb_file: str, bom_file: str) -> int:
     pcb_path = Path(pcb_file)
     bom_path = Path(bom_file)
@@ -410,6 +591,9 @@ def main(pcb_file: str, bom_file: str) -> int:
     results += check_crystal_network(bom_values, footprints, vias)
     results.append(check_connector_anchoring(footprints, vias))
     results += check_mechanical_vibration(footprints, bbox)
+    results += check_current_density(tracks, net_map)
+    results += check_decoupling_proximity(footprints, bom_values)
+    results += check_impedance_controlled_traces(tracks, net_map)
 
     print(f"[ROBUSTNESS] Results for {pcb_path.name} + {bom_path.name}:")
     for r in results:
