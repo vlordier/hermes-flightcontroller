@@ -7,10 +7,12 @@ from scripts.check_mil_spice import (
     _check_load_step,
     _check_pi_frequency,
     _check_startup_brownout,
+    _check_temp_corners,
     _parse_meas_corner,
     _parse_meas_load_step,
     _parse_meas_pi,
     _parse_meas_startup_brownout,
+    _parse_meas_temp,
 )
 
 
@@ -188,3 +190,60 @@ def test_check_corner_sweep_fails_on_excessive_ripple() -> None:
     assert len(results) == 1
     assert not results[0].passed
     assert "ripple" in results[0].name.lower()
+
+
+# ── Temperature corner sweep (MIL-STD-810G) ──────────────────────────────────
+
+
+def test_parse_meas_temp_extracts_expected_keys() -> None:
+    text = """
+temp_vout_5v    = 4.97
+temp_ripple_5v  = 0.038
+temp_vout_3v3   = 3.28
+temp_fb_5v      = 2.48
+unrelated       = 12.0
+"""
+    parsed = _parse_meas_temp(text)
+    assert parsed["temp_vout_5v"] == 4.97
+    assert parsed["temp_ripple_5v"] == 0.038
+    assert parsed["temp_vout_3v3"] == 3.28
+    assert parsed["temp_fb_5v"] == 2.48
+    assert "unrelated" not in parsed
+
+
+def test_check_temp_corners_passes_within_tolerance() -> None:
+    """Nominal outputs within ±5 % and ripple within limits should all pass."""
+    temp = {
+        "temp_vout_5v": 4.97,  # −0.6 % deviation — within ±5 %
+        "temp_ripple_5v": 0.045,  # 45 mV < 60 mV limit
+        "temp_vout_3v3": 3.30,  # near-exact — within ±5 %
+        "temp_ripple_3v3": 0.030,  # 30 mV < 36 mV limit
+    }
+    results = _check_temp_corners(temp)
+    assert results
+    assert all(r.passed for r in results), [r.detail for r in results if not r.passed]
+
+
+def test_check_temp_corners_fails_out_of_tolerance_voltage() -> None:
+    """A 7 % deviation on 5 V should exceed the ±5 % limit → FAIL."""
+    temp = {"temp_vout_5v": 4.65}  # −7 % deviation
+    results = _check_temp_corners(temp)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "temperature-corner" in results[0].name.lower()
+    assert "dev=" in results[0].detail
+
+
+def test_check_temp_corners_fails_excessive_ripple() -> None:
+    """Ripple above limit at temperature should be flagged."""
+    temp = {"temp_ripple_5v": 0.075}  # 75 mV > 60 mV limit
+    results = _check_temp_corners(temp)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "ripple" in results[0].name.lower()
+
+
+def test_check_temp_corners_empty_data_returns_no_results() -> None:
+    """No temperature measurements → no check results (nothing to validate)."""
+    results = _check_temp_corners({})
+    assert results == []

@@ -9,6 +9,7 @@ from scripts.check_robustness import (
     check_connector_anchoring,
     check_crystal_network,
     check_current_density,
+    check_debug_port_nets,
     check_decoupling_proximity,
     check_diff_pair_length_matching,
     check_impedance_controlled_traces,
@@ -247,3 +248,42 @@ def test_test_point_coverage_fails_with_no_tps() -> None:
     result = check_test_point_coverage(fps)
     assert not result.passed
     assert "0" in result.detail
+
+
+# ── check_debug_port_nets ─────────────────────────────────────────────────────
+
+
+def test_debug_port_nets_passes_with_swd() -> None:
+    """SWD port with SWDIO + SWDCLK and NRST should pass both checks."""
+    net_map = {1: "GND", 2: "SWDIO", 3: "SWDCLK", 4: "NRST", 5: "5V"}
+    results = check_debug_port_nets(net_map)
+    debug_r = next(r for r in results if "Debug" in r.name)
+    reset_r = next(r for r in results if "Reset" in r.name)
+    assert debug_r.passed, debug_r.detail
+    assert reset_r.passed, reset_r.detail
+
+
+def test_debug_port_nets_fails_when_swd_missing() -> None:
+    """Board with no SWD/JTAG nets should fail the debug port check."""
+    net_map = {1: "GND", 2: "5V", 3: "3V3"}
+    results = check_debug_port_nets(net_map)
+    debug_r = next(r for r in results if "Debug" in r.name)
+    assert not debug_r.passed
+    assert "add SWD" in debug_r.detail or "none" in debug_r.detail.lower()
+
+
+def test_debug_port_nets_fails_when_reset_missing() -> None:
+    """Board with SWD but no reset net should fail the reset check."""
+    net_map = {1: "SWDIO", 2: "SWDCLK", 3: "5V"}
+    results = check_debug_port_nets(net_map)
+    reset_r = next(r for r in results if "Reset" in r.name)
+    assert not reset_r.passed
+    assert "floating" in reset_r.detail.lower() or "NRST" in reset_r.detail
+
+
+def test_debug_port_nets_passes_with_jtag() -> None:
+    """Full JTAG (TDI/TDO/TCK/TMS) should also satisfy the debug port check."""
+    net_map = {1: "TCK", 2: "TDI", 3: "TDO", 4: "TMS", 5: "NRST"}
+    results = check_debug_port_nets(net_map)
+    debug_r = next(r for r in results if "Debug" in r.name)
+    assert debug_r.passed, debug_r.detail

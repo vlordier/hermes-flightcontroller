@@ -269,6 +269,35 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run MIL-STD-810G temperature corner sweeps
+        # Component drift at +85 °C (hot) and −40 °C (cold) per MIL-STD-810G.
+        run: |
+          if [ -f sim.net ] && [ -f PCB/sim/mil_temp_corner.cir ]; then
+            temp_cases=(
+              "nom   25  1.00 1.00 1.00"
+              "hot   85  1.13 0.85 1.05"
+              "cold -40  0.92 1.10 0.97"
+            )
+
+            for case_str in "${temp_cases[@]}"; do
+              set -- $case_str
+              tag="$1"; temp_c="$2"; rtol="$3"; ctol="$4"; ltol="$5"
+
+              sed -E \
+                -e "s/^\.param TEMP_C=.*/.param TEMP_C=${temp_c}/" \
+                -e "s/^\.param RTOL=.*/.param RTOL=${rtol}/" \
+                -e "s/^\.param CTOL=.*/.param CTOL=${ctol}/" \
+                -e "s/^\.param LTOL=.*/.param LTOL=${ltol}/" \
+                PCB/sim/mil_temp_corner.cir > "mil_temp_${tag}.cir"
+
+              cat "mil_temp_${tag}.cir" sim.net > "mil_sim_temp_${tag}.cir"
+              ngspice -b -o "sim_output_temp_${tag}.txt" "mil_sim_temp_${tag}.cir" || true
+            done
+          else
+            echo "No netlist or temperature template — skipping temperature sweeps." | tee sim_output_temp_skip.txt
+          fi
+        continue-on-error: true
+
       - name: Check MIL SPICE results across sweep cases
         run: |
           set -o pipefail
@@ -294,6 +323,8 @@ jobs:
             mil_pi_sweep_*.cir
             mil_sim_corner_*.cir
             mil_corner_*.cir
+            mil_sim_temp_*.cir
+            mil_temp_*.cir
 
   # ── 4. OpenEMS FDTD EM simulation (RE102 / RS103 approximation) ──────────
   em-simulation:

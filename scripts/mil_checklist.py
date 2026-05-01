@@ -377,6 +377,27 @@ def build_checklist(
     pcb_pwr_zone_s, pcb_pwr_zone_e = _script_status(
         scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Power zone fills"
     )
+    pcb_island_s, pcb_island_e = _script_status(
+        scripts_dir / "check_pcb.py", str(pcb_file), check_msg="Power net connectivity"
+    )
+    bom_mpn_s, bom_mpn_e = _script_status(
+        scripts_dir / "check_bom.py", str(bom_file), check_msg="MPN / part number coverage"
+    )
+    bom_elec_s, bom_elec_e = _script_status(
+        scripts_dir / "check_bom.py", str(bom_file), check_msg="Electrolytic/tantalum reliability"
+    )
+    robust_debug_s, robust_debug_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Debug port nets",
+    )
+    robust_reset_s, robust_reset_e = _script_status(
+        scripts_dir / "check_robustness.py",
+        str(pcb_file),
+        str(bom_file),
+        check_msg="Reset net presence",
+    )
     git_s, git_e = _git_sha()
     stk_s, stk_e = _stackup_status(pcb_file)
     gnd_s, gnd_e = _gnd_plane_status(pcb_file)
@@ -607,6 +628,13 @@ def build_checklist(
             pcb_pwr_zone_s,
             pcb_pwr_zone_e,
         ),
+        CheckItem(
+            "Power Net Connectivity",
+            "Critical power nets (5V, 3V3, GND, VBUS) have no isolated copper islands",
+            "check_pcb.py union-find segment connectivity check",
+            pcb_island_s,
+            pcb_island_e,
+        ),
         # -- Component / BOM --------------------------------------------------
         CheckItem(
             "Component LCSC Coverage",
@@ -628,6 +656,35 @@ def build_checklist(
             "check_bom.py power-IC scan of bom.csv",
             bom_s,
             bom_e,
+        ),
+        CheckItem(
+            "MPN / Part Number Coverage",
+            "All BOM lines carry a Manufacturer Part Number (MIL-PRF-55110 traceability)",
+            "check_bom.py MPN coverage scan of bom.csv",
+            bom_mpn_s,
+            bom_mpn_e,
+        ),
+        CheckItem(
+            "Electrolytic/Tantalum Reliability",
+            "No electrolytic or tantalum caps without justification (MIL-STD-810G vibration/lifetime)",
+            "check_bom.py electrolytic reliability scan of bom.csv",
+            bom_elec_s,
+            bom_elec_e,
+        ),
+        # -- Debug / programming access ---------------------------------------
+        CheckItem(
+            "Debug Port Nets (SWD/JTAG)",
+            "SWD or JTAG port nets (SWDIO+SWDCLK or TDI/TDO/TCK/TMS) present for programming",
+            "check_robustness.py debug net presence scan",
+            robust_debug_s,
+            robust_debug_e,
+        ),
+        CheckItem(
+            "Reset Net Presence",
+            "NRST/RESET net present and routed (prevents floating reset line)",
+            "check_robustness.py reset net scan",
+            robust_reset_s,
+            robust_reset_e,
         ),
         # -- Software / Firmware traceability ---------------------------------
         CheckItem(

@@ -1,4 +1,13 @@
-from scripts.check_pcb import PcbParser, check_power_zone_fills, check_stackup
+from __future__ import annotations
+
+from typing import Any
+
+from scripts.check_pcb import (
+    PcbParser,
+    check_power_net_islands,
+    check_power_zone_fills,
+    check_stackup,
+)
 
 
 def test_stackup_detection() -> None:
@@ -56,3 +65,45 @@ def test_power_zone_fills_fails_when_missing() -> None:
     result = check_power_zone_fills(zones)
     assert not result.passed
     assert "3V3" in result.detail or "1V8" in result.detail
+
+
+# ── Power net island detection ────────────────────────────────────────────────
+
+
+def test_power_net_islands_connected_graph_passes() -> None:
+    """Three segments forming a chain should be one connected component → PASS."""
+    # 5V net: A-B, B-C  → fully connected
+    segments = [
+        {"start": (0.0, 0.0), "end": (1.0, 0.0), "net": 1, "width": 0.8, "layer": "F.Cu"},
+        {"start": (1.0, 0.0), "end": (2.0, 0.0), "net": 1, "width": 0.8, "layer": "F.Cu"},
+        {"start": (2.0, 0.0), "end": (3.0, 0.0), "net": 1, "width": 0.8, "layer": "F.Cu"},
+    ]
+    net_map = {1: "5V"}
+    results = check_power_net_islands(segments, net_map)
+    fv_results = [r for r in results if "5V" in r.name]
+    assert fv_results, "Expected at least one result for 5V net"
+    assert fv_results[0].passed, fv_results[0].detail
+
+
+def test_power_net_islands_disconnected_fails() -> None:
+    """Two isolated segment groups for the same net should produce a FAIL."""
+    # Segment A at (0,0)-(1,0); segment B at (5,5)-(6,5) — no shared endpoint
+    segments = [
+        {"start": (0.0, 0.0), "end": (1.0, 0.0), "net": 2, "width": 0.8, "layer": "F.Cu"},
+        {"start": (5.0, 5.0), "end": (6.0, 5.0), "net": 2, "width": 0.8, "layer": "F.Cu"},
+    ]
+    net_map = {2: "3V3"}
+    results = check_power_net_islands(segments, net_map)
+    v33_results = [r for r in results if "3V3" in r.name]
+    assert v33_results, "Expected a result for 3V3 net"
+    assert not v33_results[0].passed, "Disconnected segments should fail"
+    assert "island" in v33_results[0].detail.lower()
+
+
+def test_power_net_islands_no_segments_skipped() -> None:
+    """If a critical net has no segments on the board it should be silently skipped."""
+    segments: list[dict[str, Any]] = []
+    net_map = {1: "SOME_SIGNAL"}  # None of the critical nets match
+    results = check_power_net_islands(segments, net_map)
+    # Should return one informational FAIL indicating no critical nets found
+    assert any("no critical" in r.detail.lower() for r in results)

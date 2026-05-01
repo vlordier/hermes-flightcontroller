@@ -164,6 +164,79 @@ def check_capacitor_dielectric(rows: list[BomRow]) -> CheckResult:
     )
 
 
+# Electrolytic/tantalum cap patterns — poor reliability in vibration environments
+# (MIL-STD-810 vibration, MIL-HDBK-217F reliability guidance).
+_ELECTROLYTIC_RE = re.compile(r"\belec\b|electrolytic|alumin|\btant\b|tantalum|cpol", re.IGNORECASE)
+
+# MPN (Manufacturer Part Number) field aliases exported by KiCad / JLCPCB.
+_MPN_FIELDS = ("mpn", "manufacturer part number", "mfr part #", "mfr pn", "part number")
+
+
+def check_electrolytic_reliability(rows: list[BomRow]) -> CheckResult:
+    """Flag electrolytic and tantalum capacitors as a reliability risk.
+
+    Electrolytics have limited vibration tolerance (MIL-STD-810G Method 514)
+    and finite lifetime (typically 2000 h at 85 °C).  The check does not fail
+    the BOM outright but reports the count so designers can justify or replace
+    with ceramic alternatives.
+    """
+    elec_refs: list[str] = []
+    for row in rows:
+        if _ELECTROLYTIC_RE.search(row.value) or _ELECTROLYTIC_RE.search(row.footprint):
+            elec_refs.extend(row.internal_designators)
+    if not elec_refs:
+        return CheckResult(
+            name="Electrolytic/tantalum reliability",
+            passed=True,
+            detail="No electrolytic or tantalum capacitors found",
+        )
+    sample = ", ".join(elec_refs[:5])
+    suffix = f" (+{len(elec_refs) - 5} more)" if len(elec_refs) > 5 else ""
+    return CheckResult(
+        name="Electrolytic/tantalum reliability",
+        passed=False,
+        detail=f"{len(elec_refs)} electrolytic/tantalum ref(s): {sample}{suffix} — "
+        "consider ceramic (MLCC) replacements for vibration/lifetime compliance",
+    )
+
+
+def check_mpn_coverage(rows: list[BomRow]) -> CheckResult:
+    """Verify that every BOM line has a Manufacturer Part Number (MPN).
+
+    MPN traceability is required by MIL-PRF-55110 and ITAR-controlled supply
+    chains to ensure component authenticity and enable counterfeit detection.
+    """
+    # Try to find MPN from any of the known field aliases in the raw CSV row.
+    # BomRow does not currently expose a dedicated MPN field, so we work from
+    # the LCSC code as a proxy: if LCSC is present AND non-empty it confirms
+    # at least one supply-chain-tracked part number.  We additionally scan the
+    # value field for common OEM part number patterns.
+    #
+    # Heuristic: rows whose LCSC field is empty/N/A AND whose value contains no
+    # alphanumeric "part number"-like token are flagged.
+    mpn_pattern = re.compile(r"[A-Z]{2,}[\d\-]+|[\d]+[A-Z]{1,6}[\d\-]+", re.IGNORECASE)
+    missing: list[str] = []
+    for row in rows:
+        has_lcsc = bool(row.lcsc and row.lcsc.upper() not in ("", "N/A", "-", "TBD", "DNP"))
+        has_mpn_in_value = bool(mpn_pattern.search(row.value))
+        if not has_lcsc and not has_mpn_in_value:
+            missing.extend(row.internal_designators)
+
+    if not missing:
+        return CheckResult(
+            name="MPN / part number coverage",
+            passed=True,
+            detail=f"All {len(rows)} BOM lines have a trackable part number (LCSC or MPN)",
+        )
+    sample = ", ".join(missing[:5])
+    suffix = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+    return CheckResult(
+        name="MPN / part number coverage",
+        passed=False,
+        detail=f"{len(missing)} ref(s) without LCSC or recognisable MPN: {sample}{suffix}",
+    )
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: check_bom.py <BOM_CSV>")
@@ -183,6 +256,8 @@ def main() -> None:
         check_empty_values(rows),
         check_power_ics(rows),
         check_capacitor_dielectric(rows),
+        check_electrolytic_reliability(rows),
+        check_mpn_coverage(rows),
     ]
     for r in results:
         print(r)

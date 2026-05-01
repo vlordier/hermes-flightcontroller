@@ -533,6 +533,83 @@ def _check_corner_sweep(corner: dict[str, float]) -> list[CheckResult]:
     return results
 
 
+# ── Temperature corner sweep ──────────────────────────────────────────────────
+
+# Vout tolerance at any temperature corner vs nominal (±5 %, same as component corners).
+TEMP_VOUT_TOLERANCE_FRACTION = 0.05
+
+# Ripple budget at temperature corners in mV.
+TEMP_RIPPLE_LIMIT_MV: dict[str, float] = {
+    "5v": 60.0,
+    "3v3": 36.0,
+    "1v8": 24.0,
+}
+
+# Nominal output voltages mirror CORNER_NOMINAL_V.
+TEMP_NOMINAL_V: dict[str, float] = {
+    "5v": 5.0,
+    "3v3": 3.3,
+    "1v8": 1.8,
+}
+
+
+def _parse_meas_temp(text: str) -> dict[str, float]:
+    """Extract temperature-corner sweep results.
+
+    Convention (matches mil_temp_corner.cir .meas statements):
+        - temp_vout_<rail>    : average output voltage during settled period
+        - temp_ripple_<rail>  : peak-to-peak ripple during settled period
+        - temp_fb_<rail>      : feedback node voltage
+    """
+    results = _parse_measurements(text)
+    return {
+        k: v
+        for k, v in results.items()
+        if k.startswith("temp_vout_") or k.startswith("temp_ripple_") or k.startswith("temp_fb_")
+    }
+
+
+def _check_temp_corners(temp: dict[str, float]) -> list[CheckResult]:
+    """Validate temperature-corner sweep output voltages and ripple budgets.
+
+    Applies the same ±5 % Vout tolerance as IPC-2221A component corner checks,
+    covering MIL-STD-810G temperature range of −40 °C to +85 °C.
+    """
+    results: list[CheckResult] = []
+
+    for rail, nominal in TEMP_NOMINAL_V.items():
+        vout_key = f"temp_vout_{rail}"
+        if vout_key in temp:
+            vout = temp[vout_key]
+            dev_frac = abs(vout - nominal) / nominal
+            ok = dev_frac <= TEMP_VOUT_TOLERANCE_FRACTION
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} temperature-corner Vout",
+                    passed=ok,
+                    detail=(
+                        f"{vout:.4f} V  dev={dev_frac * 100:.2f} %  "
+                        f"[limit ±{TEMP_VOUT_TOLERANCE_FRACTION * 100:.0f} % of {nominal} V]"
+                    ),
+                )
+            )
+
+        ripple_key = f"temp_ripple_{rail}"
+        if ripple_key in temp:
+            ripple_mv = temp[ripple_key] * 1000.0
+            limit_mv = TEMP_RIPPLE_LIMIT_MV.get(rail, 60.0)
+            ok = ripple_mv <= limit_mv
+            results.append(
+                CheckResult(
+                    name=f"{rail.upper()} temperature-corner ripple",
+                    passed=ok,
+                    detail=f"{ripple_mv:.2f} mV pk-pk  [limit {limit_mv:.0f} mV]",
+                )
+            )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -559,6 +636,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     startup_brownout = _parse_meas_startup_brownout(text)
     pi_metrics = _parse_meas_pi(text)
     corner = _parse_meas_corner(text)
+    temp = _parse_meas_temp(text)
 
     if not measurements:
         print(f"[MIL-SPICE:{label}] No measurements found — skipping checks.")
@@ -572,6 +650,7 @@ def _run_single_file(path: Path) -> tuple[int, int]:
     all_results += _check_startup_brownout(startup_brownout)
     all_results += _check_pi_frequency(pi_metrics)
     all_results += _check_corner_sweep(corner)
+    all_results += _check_temp_corners(temp)
 
     if not all_results:
         print(f"[MIL-SPICE:{label}] No matching rail measurements found.")

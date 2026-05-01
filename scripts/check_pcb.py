@@ -177,6 +177,30 @@ class PcbParser:
             footprints.append((fp_value, has_ref))
         return footprints
 
+    def get_segments(self) -> list[dict[str, Any]]:  # noqa: C901
+        """Return list of {start, end, net, width, layer} for every track segment."""
+        segments = []
+        for item in self.data:
+            if not (isinstance(item, list) and sexpdata.Symbol("segment") == item[0]):
+                continue
+            seg: dict[str, Any] = {"start": None, "end": None, "net": 0, "width": 0.0, "layer": ""}
+            for prop in item:
+                if not isinstance(prop, list):
+                    continue
+                if sexpdata.Symbol("start") == prop[0] and len(prop) >= 3:
+                    seg["start"] = (float(prop[1]), float(prop[2]))
+                elif sexpdata.Symbol("end") == prop[0] and len(prop) >= 3:
+                    seg["end"] = (float(prop[1]), float(prop[2]))
+                elif sexpdata.Symbol("net") == prop[0] and len(prop) >= 2:
+                    seg["net"] = int(prop[1])
+                elif sexpdata.Symbol("width") == prop[0] and len(prop) >= 2:
+                    seg["width"] = float(prop[1])
+                elif sexpdata.Symbol("layer") == prop[0] and len(prop) >= 2:
+                    seg["layer"] = str(prop[1])
+            if seg["start"] and seg["end"]:
+                segments.append(seg)
+        return segments
+
 
 # ── Individual checks ─────────────────────────────────────────────────────────
 
@@ -431,6 +455,88 @@ def check_power_zone_fills(zones: list[dict[str, str]]) -> CheckResult:
     )
 
 
+# Critical nets that must not have isolated (disconnected) track islands.
+_CRITICAL_ISLAND_NETS = {"5V", "3V3", "1V8", "GND", "VBUS"}
+
+# Snap tolerance for joining segment endpoints (mm).
+_SNAP_MM = 0.01
+
+
+def check_power_net_islands(
+    segments: list[dict[str, Any]], net_map: dict[int, str]
+) -> list[CheckResult]:
+    """Detect isolated track islands on critical power nets using union-find.
+
+    Each track segment is a graph edge.  If the net's segments form more than
+    one connected component, there are isolated copper islands — a common DFM
+    issue that causes unexpected voltage drops and potential float nodes.
+
+    Connectivity is computed via a simple union-find on rounded endpoints.
+    """
+
+    def _round_pt(pt: tuple[float, float]) -> tuple[int, int]:
+        return (round(pt[0] / _SNAP_MM), round(pt[1] / _SNAP_MM))
+
+    def _uf_find(
+        parent: dict[tuple[int, int], tuple[int, int]], x: tuple[int, int]
+    ) -> tuple[int, int]:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent.get(x, x), parent.get(x, x))
+            x = parent.get(x, x)
+        return x
+
+    def _uf_union(
+        parent: dict[tuple[int, int], tuple[int, int]],
+        a: tuple[int, int],
+        b: tuple[int, int],
+    ) -> None:
+        ra, rb = _uf_find(parent, a), _uf_find(parent, b)
+        if ra != rb:
+            parent[ra] = rb
+
+    results: list[CheckResult] = []
+
+    for net_keyword in sorted(_CRITICAL_ISLAND_NETS):
+        net_segs = [s for s in segments if net_keyword.upper() in net_map.get(s["net"], "").upper()]
+        if not net_segs:
+            continue  # net not on board
+
+        parent: dict[tuple[int, int], tuple[int, int]] = {}
+        for seg in net_segs:
+            a = _round_pt(seg["start"])
+            b = _round_pt(seg["end"])
+            parent.setdefault(a, a)
+            parent.setdefault(b, b)
+            _uf_union(parent, a, b)
+
+        roots = {_uf_find(parent, p) for p in parent}
+        components = len(roots)
+        passed = components <= 1
+        results.append(
+            CheckResult(
+                name=f"Power net connectivity — {net_keyword}",
+                passed=passed,
+                detail=(
+                    f"{len(net_segs)} segment(s) form 1 connected component"
+                    if passed
+                    else f"{len(net_segs)} segment(s) split into {components} isolated islands — "
+                    "check for missing copper connections on this net"
+                ),
+            )
+        )
+
+    if not results:
+        results.append(
+            CheckResult(
+                name="Power net connectivity",
+                passed=False,
+                detail="No critical power net segments found for island check",
+            )
+        )
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -454,6 +560,7 @@ def main(pcb_file: str) -> int:
     net_map = parser.get_net_map()
     nets = parser.get_nets()
     footprints = parser.get_footprint_refs()
+    segments = parser.get_segments()
     edge_cuts_present = parser.has_edge_cuts()
 
     all_results: list[CheckResult] = []
@@ -474,6 +581,7 @@ def main(pcb_file: str) -> int:
     all_results.append(check_net_names(nets))
     all_results.append(check_footprint_silkscreen(footprints))
     all_results.append(check_power_zone_fills(zones))
+    all_results += check_power_net_islands(segments, net_map)
 
     print(f"[PCB-CHECK] Results for {path.name}:")
     for r in all_results:

@@ -663,6 +663,71 @@ def check_impedance_controlled_traces(
     return results
 
 
+# Keywords identifying debug/programming port nets (SWD, JTAG, UART console).
+_DEBUG_NET_KEYWORDS = (
+    "SWDIO",
+    "SWDCLK",
+    "SWO",
+    "SWCLK",  # ARM SWD
+    "TCK",
+    "TDI",
+    "TDO",
+    "TMS",  # JTAG
+    "UART",
+    "TX",
+    "RX",
+    "USART",  # Serial console
+)
+
+# Critical control/reset net keywords.
+_RESET_NET_KEYWORDS = ("NRST", "RESET", "/RST", "RST")
+
+# Minimum required debug nets present (at least SWDIO + SWDCLK or TCK+TDI).
+_MIN_DEBUG_NETS = 2
+
+
+def check_debug_port_nets(net_map: dict[int, str]) -> list[CheckResult]:
+    """Verify that SWD/JTAG debug port nets are present on the board.
+
+    ARM Cortex-M MCUs require SWDIO and SWDCLK (or full JTAG TDI/TDO/TCK/TMS)
+    for programming and in-circuit debugging.  Absence from the net list
+    indicates missing debug connector routing — a common oversight that prevents
+    firmware updates without a bootloader and complicates production testing.
+    """
+    all_net_names = {n.upper() for n in net_map.values()}
+
+    debug_found = [kw for kw in _DEBUG_NET_KEYWORDS if any(kw in n for n in all_net_names)]
+    debug_ok = len(debug_found) >= _MIN_DEBUG_NETS
+
+    results: list[CheckResult] = [
+        CheckResult(
+            name="Debug port nets (SWD/JTAG)",
+            passed=debug_ok,
+            detail=(
+                f"Debug nets present: {', '.join(debug_found)}"
+                if debug_ok
+                else f"Only {len(debug_found)} debug net(s) found [{', '.join(debug_found) or 'none'}] — "
+                f"add SWD connector (SWDIO + SWDCLK minimum) [target >= {_MIN_DEBUG_NETS}]"
+            ),
+        )
+    ]
+
+    reset_found = [kw for kw in _RESET_NET_KEYWORDS if any(kw in n for n in all_net_names)]
+    results.append(
+        CheckResult(
+            name="Reset net presence",
+            passed=bool(reset_found),
+            detail=(
+                f"Reset net found: {', '.join(reset_found)}"
+                if reset_found
+                else "No NRST/RESET net found — MCU reset line may be floating"
+            ),
+        )
+    )
+
+    return results
+
+
 def main(pcb_file: str, bom_file: str) -> int:
     pcb_path = Path(pcb_file)
     bom_path = Path(bom_file)
@@ -688,6 +753,7 @@ def main(pcb_file: str, bom_file: str) -> int:
     results += check_impedance_controlled_traces(tracks, net_map)
     results += check_diff_pair_length_matching(tracks, net_map)
     results.append(check_test_point_coverage(footprints))
+    results += check_debug_port_nets(net_map)
 
     print(f"[ROBUSTNESS] Results for {pcb_path.name} + {bom_path.name}:")
     for r in results:
