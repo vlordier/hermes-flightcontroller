@@ -1,0 +1,10 @@
+active: true
+derived: true
+header: Safety traceability
+level: system
+normative: true
+ref: HERMES-001
+text: Safety-relevant control behavior shall be linked to a PRD requirement and verified by automated or documented analysis.
+verification: test
+links:
+- SYS-HERMES

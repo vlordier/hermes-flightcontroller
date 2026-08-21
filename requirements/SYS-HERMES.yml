@@ -1,0 +1,8 @@
+active: true
+derived: false
+header: Hermes Flight Controller Requirements
+level: system
+normative: true
+ref: SYS-HERMES
+text: Hermes shall provide deterministic, bounded, and fail-safe vehicle control interfaces for autonomous platforms.
+verification: review
