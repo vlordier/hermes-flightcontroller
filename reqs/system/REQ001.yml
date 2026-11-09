@@ -1,0 +1,11 @@
+active: true
+derived: false
+header: |
+  Flight Control System Integrity
+level: 1.0
+links: []
+normative: true
+ref: ''
+reviewed: R7oxAydCUuozsMoEaj_xaS2ueWmWiWebZxFOq4YZv5w=
+text: |
+  The flight controller shall maintain aircraft stability and control authority under MIL-STD-461G EMI environments and high-vibration conditions equivalent to launch profiles.

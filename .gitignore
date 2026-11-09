@@ -1,7 +1,42 @@
-PCB/HermesFC/fp-info-cache
-PCB/HermesFC/HermesFC-backups
-PCB/HermesFC/~HermesFC.kicad_pcb.lck
-PCB/HermesFC/_autosave-STM32.kicad_sch
-PCB/HermesFC/#auto_saved_files#
-PCB/HermesFC/~HermesFC.kicad_sch.lck
-PCB/HermesFC/fabrication-toolkit-options.json
+# ── KiCad ────────────────────────────────────────────────────────────────────
+**/*-backups/
+**/_autosave-*
+**/#auto_saved_files#/
+**/*.lck
+**/fp-info-cache
+**/sym-info-cache
+**/fabrication-toolkit-options.json
+PCB/HermesFC/manufacturing/
+PCB/HermesFC/kibot/
+_autosave-*
+*.kicad_prl
+*-backups/
+
+# ── Operating system ─────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*~
+
+# ── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.python-version
+.uv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

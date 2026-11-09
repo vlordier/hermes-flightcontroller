@@ -1,0 +1,70 @@
+* MIL Temperature Corner Sweep
+*
+* Models component drift across the MIL-STD-810G operating temperature range:
+*   +85 °C (HOT):  Resistors +13 % (2000 ppm/°C × 65 °C above 20 °C)
+*                  Capacitors -15 % (X7R: -15 % to +15 % over -55/+125 °C)
+*                  Inductors   +5 % (ferrite permeability drop at high T)
+*   -40 °C (COLD): Resistors  -8 % (2000 ppm/°C × 60 °C below 20 °C, opposite sign)
+*                  Capacitors +10 % (capacitance rise at low T for X7R)
+*                  Inductors  -3 % (ferrite permeability rise at low T)
+*
+* Three cases run by CI:
+*   nom   : TEMP_C=25,  RTOL=1.00, CTOL=1.00, LTOL=1.00
+*   hot   : TEMP_C=85,  RTOL=1.13, CTOL=0.85, LTOL=1.05
+*   cold  : TEMP_C=-40, RTOL=0.92, CTOL=1.10, LTOL=0.97
+*
+* Measurements consumed by scripts/check_mil_spice.py:
+*   temp_vout_5v   — average 5 V rail over settled window
+*   temp_vout_3v3  — average 3.3 V rail
+*   temp_vout_1v8  — average 1.8 V rail
+*   temp_ripple_5v — peak-to-peak ripple on 5 V rail
+*   temp_fb_5v     — feedback divider mid-point (resistor-ratio accuracy)
+
+.param TEMP_C=25
+.param RTOL=1.00
+.param CTOL=1.00
+.param LTOL=1.00
+
+* ---- ngspice temperature control --------------------------------------
+* ngspice uses .temp or .options TEMP for SPICE3-compatible simulators.
+.temp {TEMP_C}
+
+* ---- Power supply components (identical topology to mil_corner.cir) ---
+
+* Buck output filter (AP63203 — 4.7 µH / 22 µF+10 µF ceramic)
+L_out   5V_SW  5V      {4.7u * LTOL}
+C_out1  5V     0       {22u  * CTOL}
+C_out2  5V     0       {10u  * CTOL}
+R_load  5V     0       {5.0  / RTOL}      $ 1-A nominal load at 5 V
+
+* LDO (1.8 V rail)
+C_ldo1  1V8    0       {10u  * CTOL}
+C_ldo2  1V8    0       {100n * CTOL}
+R_ldo   1V8    0       {18.0 / RTOL}
+
+* Buck feedback divider
+R_fb1   5V     FB_5V   {100k * RTOL}
+R_fb2   FB_5V  0       {100k * RTOL}
+
+* 3.3 V digital rail decoupling
+C_3v3   3V3    0       {10u  * CTOL}
+C_3v3b  3V3    0       {100n * CTOL}
+
+* ---- Stimulus ----------------------------------------------------------
+
+Vin  VBUS  0    DC 5.0 AC 0
+Vsw  5V_SW VBUS DC 0 PULSE(0 5 1u 50n 50n 5u 10u)
+
+.tran 100n 200u
+
+* ---- Measurements ------------------------------------------------------
+
+.meas tran temp_vout_5v   avg v(5V)    from=150u to=200u
+.meas tran temp_vout_3v3  avg v(3V3)   from=150u to=200u
+.meas tran temp_vout_1v8  avg v(1V8)   from=150u to=200u
+
+.meas tran temp_ripple_5v  pp v(5V)    from=150u to=200u
+
+.meas tran temp_fb_5v      avg v(FB_5V) from=150u to=200u
+
+.end

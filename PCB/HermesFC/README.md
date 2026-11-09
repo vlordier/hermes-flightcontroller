@@ -1,3 +1,5 @@
 # Overview
 
-This a 4 layer PCB. In the manufacturing folder, the Gerber, BOM, and position files are available for fabricating the PCB. Parts used are JLCPCB compatible.
+This is a 4-layer PCB. Gerber, BOM, and component placement files for
+fabricating the PCB are available in the `manufacturing/` folder.
+All parts are sourced from LCSC and are compatible with JLCPCB SMT assembly.

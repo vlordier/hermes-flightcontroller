@@ -247,14 +247,6 @@
 				)
 			)
 			(symbol "NTS0104_1_1"
-				(text private "https://www.nxp.com/docs/en/data-sheet/NTS0104.pdf\n"
-					(at 31.75 -14.986 0)
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
 				(pin power_in line
 					(at -2.54 12.7 270)
 					(length 2.54)

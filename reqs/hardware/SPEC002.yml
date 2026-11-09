@@ -1,0 +1,12 @@
+active: true
+derived: false
+header: |
+  Component Derating
+level: 1.2
+links:
+- REQ001: R7oxAydCUuozsMoEaj_xaS2ueWmWiWebZxFOq4YZv5w=
+normative: true
+ref: ''
+reviewed: YLTYzto55uk39icQv9FcMRO9QFbKWERjSMTxwQ96654=
+text: |
+  All MLCC capacitors shall be X7R or better dielectric grade for temperature stability and aging resistance in space/MIL environments.

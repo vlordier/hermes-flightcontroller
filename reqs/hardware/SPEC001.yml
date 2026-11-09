@@ -1,0 +1,12 @@
+active: true
+derived: false
+header: |
+  MIL-Grade EMI Protection
+level: 1.1
+links:
+- REQ001: R7oxAydCUuozsMoEaj_xaS2ueWmWiWebZxFOq4YZv5w=
+normative: true
+ref: ''
+reviewed: 7qr3cSOlw9pqBt1wyjQ7OStvaa9mvDKbdgfTPG5VZBs=
+text: |
+  The PCB shall include a continuous ground plane on at least one internal layer and utilize 0.25mm minimum track-to-track clearance to meet MIL-STD-461G radiated emissions requirements.

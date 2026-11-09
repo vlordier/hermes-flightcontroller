@@ -1,0 +1,162 @@
+kibot:
+  version: 1
+
+preflight:
+  # ERC and DRC run in dedicated CI jobs; disable here to avoid duplication.
+  run_erc: false
+  run_drc: false
+  ignore_unconnected: false
+
+outputs:
+  # ── Gerber files (MIL-PRF-55110 / IPC-2221 layer naming) ─────────────────
+  - name: gerbers_mil
+    comment: Gerber files (MIL-grade, all copper layers + fab notes)
+    type: gerber
+    dir: gerbers
+    options:
+      exclude_edge_layer: true
+      exclude_pads_from_silkscreen: false
+      plot_sheet_reference: true          # Required for MIL traceability
+      plot_footprint_refs: true
+      plot_footprint_values: true
+      force_plot_invisible_refs_vals: true # Show all refs for inspection
+      tent_vias: true
+      use_protel_extensions: false
+      gerber_precision: 4.6
+      create_gerber_job_file: true
+      use_gerber_x2_attributes: true
+      use_gerber_net_attributes: true
+    layers:
+      - F.Cu
+      - B.Cu
+      - In1.Cu
+      - In2.Cu
+      - F.SilkS
+      - B.SilkS
+      - F.Mask
+      - B.Mask
+      - F.Fab                             # Fabrication layer (MIL requirement)
+      - B.Fab
+      - Edge.Cuts
+      - F.Courtyard                       # Courtyard for DFA checks
+      - B.Courtyard
+
+  # ── Drill files ───────────────────────────────────────────────────────────
+  - name: drill_mil
+    comment: Drill/route files (NC-Drill format)
+    type: excellon
+    dir: gerbers
+    options:
+      map: gerber
+      pth_and_npth_single_file: false
+      zeros_format: DECIMAL_FORMAT
+      left_digits: 4
+      right_digits: 6
+
+  # ── MIL-grade Bill of Materials (with derating notes) ─────────────────────
+  - name: bom_mil
+    comment: BOM with MIL derating, temp rating, and LCSC part numbers
+    type: bom
+    dir: bom
+    options:
+      output: '%f_MIL_BOM.%x'
+      ref_separator: ','
+      group_components: true
+      sort_style: type_value
+      columns:
+        - field: References
+          name: References
+        - field: Value
+          name: Value
+        - field: Quantity Per PCB
+          name: Qty
+        - Description
+        - Footprint
+        - field: 'LCSC Part #'
+          name: 'LCSC Part #'
+        - field: 'Temperature Rating'
+          name: 'Temp Rating'
+        - field: 'Voltage Rating'
+          name: 'Voltage Rating'
+        - field: 'Derating Note'
+          name: 'Derating Note'
+        - field: 'MIL Equiv'
+          name: 'MIL Equivalent'
+
+  # ── Schematic PDF (with revision block for traceability) ──────────────────
+  - name: schematic_pdf_mil
+    comment: Schematic PDF with full title block for MIL traceability
+    type: pdf_sch_print
+    dir: docs
+
+  # ── PCB assembly / layout PDF ─────────────────────────────────────────────
+  - name: pcb_pdf_mil
+    comment: PCB layout PDF (all signal + plane layers)
+    type: pdf_pcb_print
+    dir: docs
+    options:
+      plot_sheet_reference: true
+    layers:
+      - layer: F.Cu
+      - layer: B.Cu
+      - layer: In1.Cu
+      - layer: In2.Cu
+      - layer: F.SilkS
+      - layer: B.SilkS
+      - layer: F.Fab
+      - layer: B.Fab
+      - layer: Edge.Cuts
+
+  # ── Pick-and-place / assembly ─────────────────────────────────────────────
+  - name: position_mil
+    comment: Component placement file (pick-and-place, MIL orientation)
+    type: position
+    dir: assembly
+    options:
+      format: CSV
+      units: millimeters
+      separate_files_for_front_and_back: true  # Separate for AXI inspection
+      only_smd: false
+
+  # ── IPC-D-356 netlist (for flying-probe & bed-of-nails testing) ───────────
+  - name: ipc_netlist
+    comment: IPC-D-356A netlist for automated electrical testing
+    type: ipc_netlist
+    dir: assembly
+
+  # ── Board stackup report ──────────────────────────────────────────────────
+  - name: stackup_report
+    comment: Layer stackup report (impedance, dielectric, copper weights)
+    type: pcb_print
+    dir: docs
+    options:
+      plot_sheet_reference: true
+    layers:
+      - layer: F.Cu
+      - layer: In1.Cu
+      - layer: In2.Cu
+      - layer: B.Cu
+      - layer: Edge.Cuts
+
+  # ── 3D renders (top + bottom for inspection) ──────────────────────────────
+  - name: render_top_mil
+    comment: 3D render – top view (high resolution for MIL inspection)
+    type: render_3d
+    dir: 3d
+    options:
+      ray_tracing: true
+      orthographic: true                  # Orthographic preferred for inspection
+      view: top
+      width: 3840
+      height: 2160
+
+  - name: render_bottom_mil
+    comment: 3D render – bottom view
+    type: render_3d
+    dir: 3d
+    options:
+      ray_tracing: true
+      orthographic: true
+      view: bottom
+      width: 3840
+      height: 2160

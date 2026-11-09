@@ -1,0 +1,12 @@
+active: true
+derived: false
+header: |
+  Mechanical Robustness
+level: 1.3
+links:
+- REQ001: R7oxAydCUuozsMoEaj_xaS2ueWmWiWebZxFOq4YZv5w=
+normative: true
+ref: ''
+reviewed: fXmajdj7ZHozyMpiXJBDVY5zsTHXS2OlEKdTcCIvrSs=
+text: |
+  The PCB footprint for connectors shall utilize mounting holes for mechanical relief to ensure solder joint integrity under launch vibration profiles.

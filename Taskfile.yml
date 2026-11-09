@@ -1,0 +1,32 @@
+# Hermes Taskfile
+
+version: '3'
+
+tasks:
+  validate:
+    desc: Run all MIL-SPEC compliance checks
+    cmds:
+      - uv run scripts/check_bom.py PCB/HermesFC/manufacturing/bom.csv
+      - uv run scripts/check_pcb.py PCB/HermesFC/HermesFC.kicad_pcb
+      - uv run scripts/mil_checklist.py
+    sources:
+      - scripts/*.py
+      - PCB/HermesFC/**/*
+    generates:
+      - mil_compliance.md
+
+  test:
+    desc: Run unit tests for scripts
+    cmds:
+      - uv run pytest tests/ --cov=scripts
+
+  lint:
+    desc: Run ruff and mypy
+    cmds:
+      - uv run ruff check .
+      - uv run mypy .
+
+  export:
+    desc: Run KiBot manufacturing exports (Local)
+    cmds:
+      - kibot -c PCB/kibot.yaml
