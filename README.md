@@ -10,6 +10,65 @@ applications. The PCB is designed in **KiCad** as a 4-layer board.
 The hardware design is complete. PCB fabrication and firmware development are
 the next steps — check back for updates.
 
+
+```mermaid
+graph LR
+    subgraph pcb["PCB — 4-Layer STM32F405"]
+        MCU[STM32F405<br/>RGT6]
+        IMU[MPU-6050<br/>+ ICM-20948]
+        BARO[BMP280<br/>Barometer]
+        PWR[AP63203 Buck<br/>+ LD39015 LDO]
+    end
+
+    subgraph iface["Interfaces"]
+        ESC[4× ESC PWM]
+        UART[UART]
+        I2C[I²C Bus]
+        USB[USB FS]
+    end
+
+    MCU -->|I²C| IMU
+    MCU -->|I²C| BARO
+    PWR -->|5V| MCU
+    PWR -->|1.8V| IMU
+    MCU -->|PWM| ESC
+    MCU -->|UART/USB| iface
+
+```
+
+## Quick Start
+
+### Validate the design locally
+```bash
+# Run lint and tests
+uv sync --group dev
+uv run ruff check scripts/ tests/
+uv run ruff format --check scripts/ tests/
+uv run mypy scripts/
+uv run pytest tests/ -v
+```
+
+### Review hardware files
+```bash
+# Schematic and layout PDFs are in PCB/
+open PCB/Schematic-HermesFC.pdf
+open PCB/PCB-HermesFC.pdf
+```
+
+### Order PCB from JLCPCB
+1. Navigate to `PCB/HermesFC/manufacturing/`
+2. Upload `HermesFC-Gerber.zip` to JLCPCB
+3. Review BOM (`bom.csv`) and positions (`positions.csv`)
+
+
+    MCU -->|I²C| IMU
+    MCU -->|I²C| BARO
+    PWR -->|5V| MCU
+    PWR -->|1.8V| IMU
+    MCU -->|PWM| ESC
+    MCU -->|UART/USB| iface
+```
+
 ## Features
 
 - **Microcontroller:** STM32F405RGT6
